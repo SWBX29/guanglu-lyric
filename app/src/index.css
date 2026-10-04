@@ -130,27 +130,19 @@
   }
 }
 
-/* 列表当前行：卡拉 OK 扫光 + 呼吸发光 + bass 脉冲（--sweep/--bass 由 rAF 驱动） */
+/* 列表当前行：实色暖白 + 适度发光（--bass 由 rAF 驱动）。
+   注意：不再用 background-clip:text 承载卡拉OK渐变 —— 该方案在子元素（逐字动画）
+   带 opacity/filter 时，移动端会出现"鬼影/糊团"式渲染（2026-10-04 修复）。
+   扫光改由 .lyric-write-wrap 的 mask-image 表达：已唱全亮、未唱压暗。 */
 .lyric-list-cur {
   position: relative;
-  background-image: linear-gradient(
-    100deg,
-    var(--lyric-glow) 0%,
-    #fffdf6 calc(var(--sweep, 0%) - 12%),
-    rgba(255, 255, 255, 0.42) var(--sweep, 0%),
-    rgba(255, 255, 255, 0.42) 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #fffaf0;
   transform: scale(calc(1.05 + var(--bass, 0) * 0.07));
   transform-origin: left center;
-  animation:
-    lyric-line-in 0.4s cubic-bezier(0.25, 0.8, 0.3, 1) both,
-    lyric-glow-breathe 2.6s ease-in-out 0.4s infinite;
+  animation: lyric-line-in 0.4s cubic-bezier(0.25, 0.8, 0.3, 1) both;
 }
 
-/* 选中行背景微光晕（不参与 background-clip: text，用 ::before 垫在文字下） */
+/* 选中行背景微光晕（radial 暖光，垫在文字下层） */
 .lyric-list-cur::before {
   content: '';
   position: absolute;
@@ -175,11 +167,11 @@
   }
 }
 
-/* 当前行逐字弹入：短距上浮，animation-delay 按字索引错峰 */
+/* 当前行逐字弹入：短距上浮 + 透明淡入（不用 blur —— 中文字号下会糊成光斑） */
 .lyric-char {
   display: inline-block;
   animation: lyric-char-in 0.45s cubic-bezier(0.25, 0.8, 0.35, 1) both;
-  will-change: transform, filter;
+  will-change: transform, opacity;
 }
 @keyframes lyric-char-in {
   0% {
@@ -190,44 +182,54 @@
   }
 }
 
-/* 模拟书写揭示：初始透明 + 轻模糊，按行时长/字数（≤80ms/字）依次清晰浮现 */
+/* 模拟书写揭示：按行时长/字数（≤80ms/字）依次清晰浮现（纯透明度，保证可读） */
 .lyric-char-write {
   animation:
     lyric-char-in 0.45s cubic-bezier(0.25, 0.8, 0.35, 1) both,
-    lyric-char-write-in 0.32s ease-out both;
+    lyric-char-write-in 0.28s ease-out both;
   /* animation-delay 由 React 内联按字索引写入，两个动画层共用同一延迟 */
 }
 @keyframes lyric-char-write-in {
   0% {
     opacity: 0;
-    filter: blur(2.5px);
   }
   100% {
     opacity: 1;
-    filter: blur(0px);
   }
 }
 
 /* 书写容器：笔尖的轨道 = 文字实际宽度（inline-block 收缩包裹），
-   否则 left:0→100% 会按整行容器宽度走，笔尖飘到文字末尾之外 */
+   否则 left:0→100% 会按整行容器宽度走，笔尖飘到文字末尾之外。
+   卡拉OK扫光：mask 以本容器（=文字宽）为坐标系，与笔尖进度同坐标系 */
 .lyric-write-wrap {
   position: relative;
   display: inline-block;
+  -webkit-mask-image: linear-gradient(
+    100deg,
+    #000 calc(var(--sweep, 0%) - 10%),
+    rgba(0, 0, 0, 0.5) var(--sweep, 0%)
+  );
+  mask-image: linear-gradient(
+    100deg,
+    #000 calc(var(--sweep, 0%) - 10%),
+    rgba(0, 0, 0, 0.5) var(--sweep, 0%)
+  );
 }
 
-/* 发光"笔尖"：随书写进度从左到右移动，揭完淡出（animationDuration 由 React 按行写入） */
+/* 发光"笔尖"：随书写进度从左到右移动，揭完淡出（animationDuration 由 React 按行写入）。
+   被扫光 mask 轻微压暗，故基底略提亮补偿 */
 .lyric-pen {
   position: absolute;
   top: 50%;
   left: 0;
-  width: 7px;
-  height: 7px;
-  margin-top: -3.5px;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
   border-radius: 9999px;
   background: #fffdf6;
   box-shadow:
-    0 0 6px 2px var(--lyric-glow),
-    0 0 16px 5px color-mix(in srgb, var(--lyric-glow) 65%, transparent);
+    0 0 5px 2px var(--lyric-glow),
+    0 0 14px 5px color-mix(in srgb, var(--lyric-glow) 55%, transparent);
   pointer-events: none;
   animation: lyric-pen-move 1s linear both;
 }
@@ -282,6 +284,10 @@
 }
 .lyric-list-cur.lyric-list-item {
   opacity: 1;
+  /* 当前行适度发光（比 3D 飞行字幕克制得多：避免小面板里糊成光带） */
+  text-shadow:
+    0 0 7px color-mix(in srgb, var(--lyric-glow) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--lyric-glow) 28%, transparent);
 }
 
 /* 纯音乐 / 无歌词：优雅呼吸提示 */
