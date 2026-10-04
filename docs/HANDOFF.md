@@ -16,7 +16,7 @@
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY` 已在 CF 侧设置（本地副本在 `app/.dev.vars`，已 gitignore） |
 | Cron | `23 4 * * *`（每天清理过期会话） |
 | Git | 已推送到 **https://github.com/SWBX29/guanglu-lyric**（Public，master，含全部历史）；本地工作树 clean |
-| 质量门 | `tsc -b` exit 0 ｜ `vitest` **60/60** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 28–39s 全绿、deploy 25–34s 实发成功 |
+| 质量门 | `tsc -b` exit 0 ｜ `vitest` **57/57** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 28–39s 全绿、deploy 25–34s 实发成功 |
 | 代码状态 | **可直接使用**；自定义域名/CI/审计等收尾全部完成；剩 1 项人工验证（手机扫码）。注意：**生产播放受网易云对 CF 出口的风控限制**（§9/V29，本地运行不受影响） |
 
 **一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；GitHub Actions CI（push 即自动发布）与结构化审计日志均已完成；唯一未人工验证的是"真人扫码登录 + 播放"，且**生产环境播放受网易云对云出口的风控限制**（§9/V29；本地运行完整可用）。
@@ -149,10 +149,12 @@
 | `01dafb8` | fix：外链探测与代理取流补显式 User-Agent（空 UA 会被退回 302 错误链） |
 | `c751554` | chore：探测失败诊断信息临时透出（一次性，随后收敛） |
 | `2106ebd` | chore：收敛取链失败话术（定位网易云风控 code=-462）；移除临时诊断 |
+| `7ae5d93` | fix：UI/播放状态机缺陷修复 —— 加载态卡死与自动播放拦截感知、同曲重试、笔尖越界飘空、天气菜单压面板、二维码超时僵尸态、快速切歌守卫；eslint 忽略 `.wrangler`/`.tmp` 构建产物 |
+| `1b3c2d4` | fix：生产直连播放被 CSP/混合内容拦截 —— `media-src` 放行 `music.163.com` 与 `*.music.126.net`，`upgrade-insecure-requests` 升级 outer→CDN 的 http 302；顺带放行 CF 探针消除控制台噪音 |
 
 ---
 
-## 6. 验证矩阵（V1–V29，全部实际执行过）
+## 6. 验证矩阵（V1–V32，全部实际执行过）
 
 | # | 检查 | 命令/方法 | 结果 |
 |---|---|---|---|
@@ -183,6 +185,9 @@
 | V27 | **GitHub Actions CI 端到端** | 共 3 次运行：push 首跑 / 手动触发 / 推送文档再触发 | ✅ verify 32–39s 全绿；deploy 25–32s 实发成功（首版 `8ddf40c7`，gzip 218.87 KiB / startup 21 ms）；未配 token 时 deploy 正确跳过并打 notice |
 | V28 | **审计日志端到端** | 本地 dev + curl（代理拒绝×3 / 同 reason 重复 / 注入会话登出 / `cdn-cgi` 触发 Cron）+ D1 读回 | ✅ 落库 6 行：`proxy_rejected`×3（带 IP HMAC；同 reason 连发 2 次仅 1 行=**节流生效**）、`logout`（带主体哈希，证明 AES-GCM 密文会话可解密读取）、`session_expired_purge` `purged:0`→`purged:1`（**meta.changes 提取正确**，过期行被删）；55/55 单测覆盖哈希/节流/吞错；`login_success` 待真人扫码（见 §9） |
 | V29 | **生产取链失败根因定位** | 本地 vs 生产同 id 对照 + 一次性探针 Worker（6 条候选链路，用后已删） | ✅ 本地（中国出口）：206 + 真实 MP3；生产（CF 出口）：weapi `code:404`、外链端点 `200 text/html`、传统明文 API `code:-462`（**风控验证页**"验证成功后，可进行下一步操作哦~"）→ 结论：**网易云对云出口的播放取链下发风控挑战**，非代码缺陷（`song/detail` 等普通接口从 CF 正常）；同期修复：`songUrl` 补传会话 cookie（与代理一致）+ 外链兜底链路（命中即用、isolate 缓存、空 UA 修复） |
+| V30 | **UI/播放状态机缺陷修复的实测闭环** | 本地双服务（8787+3000）+ 浏览器 DOM 几何/快照取证（只读） | ✅ 笔尖轨道=文字实际宽（实测 144/160/128px；修复前一律冲到 ~258px）；当前行渐变/光晕正常；右上角主题+天气簇底边 222 < 面板顶 227（修复前 8 个 chips 整体压住面板首行）；搜索→点歌→进度前进（11%→38%）→暂停冻结→恢复前进全部正常；控制台 0 报错；二维码 60s 超时出现「二维码已超时 + 刷新二维码」入口（线上同样复现） |
+| V31 | **生产直连播放失败根因定位（两个浏览器侧拦截点）** | 线上 curl 对照 + 浏览器实测复现 + https CDN 对照 | ✅ ① 页面 CSP `media-src 'self'` 直接拒绝跨源音频（music.163.com）；② outer 端点 302 落到 **http** CDN（`m7xx/m8xx.music.126.net`），HTTPS 页面下属混合内容。两条同时拦。修复：CSP 放行 `https://music.163.com https://*.music.126.net` + `upgrade-insecure-requests`；**实测同路径 https CDN 返回 200 audio/mpeg（3.7MB）**（浏览器会把 audio 混合内容自动升级，302 跳转在 UIR 下同被升级） |
+| V32 | **CSP 修复部署核对** | 线上 curl -D（经本机代理） | ✅ 生产首页已返回新 CSP：`media-src 'self' https://music.163.com https://*.music.126.net; …; upgrade-insecure-requests`；CI verify+deploy 双绿（version `见 wrangler deployments list`）。真实设备出声属人工验证项（见 §9），浏览器自动化额度受限后以代码/网络层证据闭环 |
 
 ---
 
@@ -223,7 +228,8 @@
    → 另注意：`gh repo create` 用集成 token 会报 `Resource not accessible by integration` —— 把 `$env:GH_TOKEN` 清空后用 keyring token 创建即可。
 14. **沙箱内 workerd 的 SQLite 状态初始化会崩 → `wrangler d1` 本地命令必须沙箱外跑**：沙箱内执行 `db:apply:local` / `d1 execute --local` 会以 `Fatal uncaught kj::Exception: … no such table: _cf_ALARM: SQLITE_ERROR` + `Assertion failed … uv async.c` 崩掉，现场只剩 0 字节 `metadata.sqlite-journal`（未提交事务）；**全新状态同样复现**（不是旧状态/残留进程问题），**沙箱外同样命令则一次通过**。
    → 解法：`db:apply:local`、`d1 execute --local`（含 `--file`）以及需要 D1 写入的本地验证，一律在沙箱外执行。
-   → 本地手动触发 Cron：`curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled?cron=23+4+*+*+*"`（返回 `ok`）；注意 `--test-scheduled` 的 `/__scheduled` 会被 Static Assets 的 SPA 回落遮蔽（实测）。
+   → 本地手动触发 Cron：`curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled?cron=23+4+*+*+*"`（返回 `ok`）；注意 `--test-scheduled` 的 `/__scheduled` 会被 Static Assets 的 SPA 回落遮蔽（实测）。新版 wrangler 提示的本地入口为 `/cdn-cgi/local/scheduled`（v4.147 实测提示）。
+15. **生产直连播放的两个浏览器侧拦截点（2026-10-04 定位，已修复）**：直连模式让 `<audio>` 直接播 `https://music.163.com/song/media/outer/url?id=X.mp3`，在 HTTPS 站点会被两层拦截 —— ① `_headers` 的 CSP `media-src 'self'` 直接拒绝跨源音频；② outer 端点 302 落到 **http** CDN（`m7xx/m8xx.music.126.net`），属混合内容（`<audio>` 属"可升级内容"，但需要策略允许升级）。**解法（已固化）**：CSP 增加 `media-src 'self' https://music.163.com https://*.music.126.net` 与 `upgrade-insecure-requests`（302 的 http 目标会被升级为 https；实测同路径 https CDN 返回 200 audio/mpeg）。注意 `_headers` 只对静态资源生效，改动需重新部署；`media-src` 用子域通配符（`https://*.music.126.net`）覆盖 m7xx/m8xx 系列 CDN。另：CF 自动注入的 Web Analytics 探针也被原 CSP 拦截（控制台资源错误），已一并放行 `static.cloudflareinsights.com` / `cloudflareinsights.com`。
 
 ---
 
@@ -232,12 +238,12 @@
 | 项 | 说明 |
 |---|---|
 | **真人扫码登录** | 接口层已验证（801/错误分支/D1 读写/加密解密），但**没人用手机真扫过**。这是唯一需要人工的验证；扫码成功后可在 D1 `audit_events` 核对新增的 `login_success` 行（审计的最后一块拼图） |
-| **播放 + 频谱 + 拖动 seek** | 逻辑与代理已验证（206 + 8 MiB + MP3 字节），但没在浏览器里听过 |
-| **iOS/Safari 兼容** | `AudioContext` 手势要求、`crossOrigin` + Range 行为未实测 |
+| **播放 + 频谱 + 拖动 seek** | 逻辑与代理已验证（206 + 8 MiB + MP3 字节）。本地浏览器已实测：搜索→点歌→音频加载→进度前进→暂停冻结→恢复前进（V30）；生产直连模式的真机出声待人工确认（V31/V32） |
+| **iOS/Safari 兼容** | `AudioContext` 手势要求、`crossOrigin` + Range 行为未实测；直连模式依赖 `upgrade-insecure-requests` 对 302 的 https 升级，Safari 同属"可升级内容"策略，真机待验 |
 | **G5 CPU 持续观察** | 102–123 ms 峰值高于文档 10 ms 名义值却未被拒（isolate 弹性）；若流量增大出现 `1102`，瘦身顺序：① `songUrl`/`lyric` 加平台缓存 ② 二维码改前端渲染（需与 H2 绑定一起评估）③ weapi 链路去 zod |
 | **墙内可达性** | 本机直连 workers.dev 被黑洞（经代理可达）；已绑自定义域名 `lyric.swbx.cc.cd`（§12-2），但其可达性同样受 CF 边缘 IP 干扰情况影响，属尽力而为 |
-| **生产播放受限（已定位）** | 网易云对 CF 出口的取链端点下发风控挑战（`code:-462`）→ 生产环境无法拉起播放（UI 已给出明确话术）；搜索/登录/歌词/审计等全部不受影响，本地运行（中国出口）播放完整可用。兜底链路已就位（网易云若放宽即自动恢复）；候选后续方案：① 客户端直连播放（手机在中国出口，**无频谱**，待验证）② 自建中国出口中继（Cloudflare Tunnel，重） |
-| **未做（非阻断）** | 上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销 |
+| **生产播放（直连模式，代码/网络层已验证）** | 网易云对 CF 出口的取链端点下发风控挑战（`code:-462`，§6 V29）→ 降级为客户端直连外链（无频谱）。2026-10-04 又定位并修复两个浏览器侧拦截点（CSP `media-src` / outer→http CDN 的混合内容，§8 陷阱 15）：新 CSP 已上线（V31/V32）。**真机出声仍待人工确认**（手机走中国出口直连外链本就可行）。注意：部分歌曲无外链（如周杰伦原版 302→`/404`），UI 会给出加载失败提示，属版权限制不可绕。候选增强：自建中国出口中继（Cloudflare Tunnel，重） |
+| **未做（非阻断）** | 上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销；窄屏（如 390px）下「开始浮层」与已打开的网易云面板容器存在点击重叠（收起面板即恢复，2026-10-04 记录） |
 
 ---
 
@@ -249,7 +255,7 @@
 cd E:\AIwork\Kimi_Agent\app
 
 npm run check        # tsc -b（前端 + Worker 双目标）
-npm run test         # vitest，应为 55/55
+npm run test         # vitest，应为 57/57
 npm run build        # vite build → dist/public
 npm run dev          # 前端 HMR（/api/* 由 Vite 代理转发到 8787，需先起 dev:worker → 见 §8 陷阱 10）
 npm run dev:worker   # ★ 全栈本地开发用这个：Worker + 本地 D1 + secrets，端口 8787
@@ -305,19 +311,19 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 1. 读 `docs/cloudflare-migration.md`（决策 + 免费档边界 + **V1–V24 验证矩阵**）。
 2. 读 `app/api/boot.ts` + `app/api/lib/env.ts` + `app/wrangler.jsonc`（运行时入口与绑定契约）。
 3. 读 `app/api/neteaseSession.ts` + `app/api/lib/proxyToken.ts` + `app/api/lib/loginBind.ts`（三条安全主线）。
-4. 跑一遍 `npm run check && npm run test`，确认 55/55 与 tsc 绿（这是"当前基线"）。
+4. 跑一遍 `npm run check && npm run test`，确认 57/57 与 tsc 绿（这是"当前基线"）。
 5. 若要做功能迭代：**先跑 `npm run dev:worker` + `npm run dev`（双终端，见 §8 陷阱 10）**，改完再 `npm run deploy`。
-6. 若遇到构建/运行报错：**优先查 §8 的 14 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"（以及"是否该在沙箱外跑"）。
+6. 若遇到构建/运行报错：**优先查 §8 的 15 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"（以及"是否该在沙箱外跑"）。
 
 ---
 
 ## 12. 收尾进展（按价值排序）
 
 1. **GitHub CI —— ✅ 已完成（2026-10-04）**：仓库 `https://github.com/SWBX29/guanglu-lyric`（Public）；工作流 `.github/workflows/ci.yml`：
-   - `verify`（push / PR / 手动）：`npm ci --ignore-scripts` → `tsc -b` → 55 测试 → `vite build` → `wrangler deploy --dry-run`；实测 **29–39s 全绿**。
+   - `verify`（push / PR / 手动）：`npm ci --ignore-scripts` → `tsc -b` → 57 测试 → `vite build` → `wrangler deploy --dry-run`；实测 **29–39s 全绿**。
    - `deploy`（仅 master push / 手动触发；门控在 `CLOUDFLARE_API_TOKEN` 是否存在，缺失时打 notice 跳过）：`npm run deploy`；实测 **25–32s 发布成功**。
    - Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 均已配置。**校验 token 要用账户级端点** `GET /client/v4/accounts/<id>/tokens/verify`（`/user/tokens/verify` 对账户 token 会误报 Invalid，别被误导）。
    - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
 2. **自定义域名 —— ✅ 已完成（2026-10-04）**：`lyric.swbx.cc.cd`（zone `swbx.cc.cd`，同账户）已绑定，DNS 与证书由 CF 自动管理；实测双入口同时可用（自定义域名 + workers.dev，后者以 `workers_dev: true` 显式保留——wrangler 检测到 routes 会默认停用它）。绑定路径：`wrangler.jsonc` 的 `routes[].custom_domain`，由本地 wrangler OAuth 部署完成（账户 API token 调 `/accounts/*/workers/domains` 返回 10405，不能用于绑定）。另显式 `preview_urls: false`，关闭未使用的预览 URL。**CI 部署兼容性已实测通过**：push 携带该 routes 配置的 CI 部署全绿（run `37197981932`，deploy 31s）——CI token 对既有绑定是无操作，无需 zone 路由写权限。
 3. **审计日志 —— ✅ 已完成（2026-10-04）**：新增 `audit_events` 表（迁移 `0001`，本地与远端均已应用）。四类事件：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`；主体只落 HMAC-SHA256（netease uid / 客户端 IP），绝不落 cookie 与明文 IP；代理拒绝带「每 isolate × 每 reason × 60s 最多一行」防刷节流（避免滥用流量借审计打爆 D1 免费写额度）；Cron 每日顺带清理超 90 天旧事件。端到端验证见 §6 V28。
-4. **生产播放（新发现，待定）**：网易云对 CF 出口的播放取链下发风控挑战（§6 V29）——生产环境暂时无法拉起播放，UI 话术已收敛；本地运行不受影响。候选方案见 §9（客户端直连无频谱 / 自建中国出口中继），等待手机端验证结果。
+4. **生产播放 —— 直连模式已上线 + CSP/混合内容修复（2026-10-04，待真机出声确认）**：网易云对 CF 出口的播放取链下发风控挑战（§6 V29）→ 降级为客户端直连外链（无频谱，commit `2842904`）。随后系统排查定位到直连播放的两个浏览器侧拦截点（CSP `media-src 'self'` + outer→http CDN 混合内容，§8 陷阱 15），已在 commit `1b3c2d4` 修复并部署（§6 V31/V32）。剩：手机端真实出声验证 + 部分歌曲无外链（版权）时的失败提示符合预期。候选增强见 §9（自建中国出口中继）。
