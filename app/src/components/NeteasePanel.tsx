@@ -31,10 +31,21 @@ function QrLogin() {
     staleTime: Infinity,
   });
   const key = qr.data?.key ?? '';
-  // 轮询要省着用（免费档请求配额）：3s 一次，且最多轮询 60s
+  // 轮询要省着用（免费档请求配额）：3s 一次，且最多轮询 60s。
+  // 到点后若仍未登录，需要显式提示并给出刷新入口（否则二维码区域会静默变成僵尸态）。
+  // 用「超时时的 key」而不是布尔量：key 一换（刷新二维码）超时态自动失效，无需额外复位。
   const pollStartRef = useRef(0);
+  const [timedOutKey, setTimedOutKey] = useState<string | null>(null);
   useEffect(() => {
+    if (!key) return;
     pollStartRef.current = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - pollStartRef.current > 60_000) {
+        setTimedOutKey(key);
+        window.clearInterval(timer);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, [key]);
   const check = trpc.netease.qrcodeCheck.useQuery(
     { key },
@@ -49,6 +60,8 @@ function QrLogin() {
     },
   );
   const status = check.data?.status;
+  // 超时态：当前 key 已超时且尚未登录成功
+  const timedOut = !!key && timedOutKey === key && status !== 'success';
 
   useEffect(() => {
     if (status === 'success') {
@@ -110,8 +123,18 @@ function QrLogin() {
       )}
       <p className="flex items-center gap-1.5 text-xs text-white/55">
         <QrCode className="h-3.5 w-3.5" />
-        {statusText}
+        {timedOut ? '二维码已超时' : statusText}
       </p>
+      {timedOut && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="border-white/15 bg-white/5 text-white/80 hover:bg-white/10"
+          onClick={() => void qr.refetch()}
+        >
+          <RefreshCw className="mr-1 h-3.5 w-3.5" /> 刷新二维码
+        </Button>
+      )}
     </div>
   );
 }

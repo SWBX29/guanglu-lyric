@@ -208,6 +208,13 @@
   }
 }
 
+/* 书写容器：笔尖的轨道 = 文字实际宽度（inline-block 收缩包裹），
+   否则 left:0→100% 会按整行容器宽度走，笔尖飘到文字末尾之外 */
+.lyric-write-wrap {
+  position: relative;
+  display: inline-block;
+}
+
 /* 发光"笔尖"：随书写进度从左到右移动，揭完淡出（animationDuration 由 React 按行写入） */
 .lyric-pen {
   position: absolute;
@@ -297,10 +304,12 @@
 }
 
 /* ===== 歌词面板：折叠 / 展开 ===== */
+/* top 由 50% 下移 24px：给右上角主题按钮簇（底缘约在 50%-200px 区间的常见窗口）让位，
+   避免最后一个主题按钮压住面板顶部 */
 .lyric-panel-wrap {
   position: absolute;
   right: 20px;
-  top: 50%;
+  top: calc(50% + 24px);
   z-index: 10;
   width: min(80vw, 300px);
   transform: translateY(-50%) translateX(0);
@@ -318,7 +327,7 @@
 /* 边缘悬浮开关（玻璃拟态），展开时贴在面板左缘，收起时回到屏幕右缘 */
 .lyric-toggle {
   position: absolute;
-  top: 50%;
+  top: calc(50% + 24px);
   right: calc(min(80vw, 300px) + 32px);
   z-index: 20;
   transform: translateY(-50%);

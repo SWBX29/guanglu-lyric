@@ -64,6 +64,7 @@ export default function Home() {
   const [prevLine, setPrevLine] = useState(-1);
   const [lyricsOpen, setLyricsOpen] = useState(true);
   const [weather, setWeather] = useState<WeatherMode>('auto');
+  const [weatherOpen, setWeatherOpen] = useState(false);
   const listContainerRef = useRef<HTMLDivElement>(null);
   const lastSweepElRef = useRef<HTMLDivElement | null>(null);
   const lastPreElRef = useRef<HTMLDivElement | null>(null);
@@ -80,6 +81,7 @@ export default function Home() {
     { id: songId ?? 0 },
     { enabled: songId != null, retry: 1, refetchOnWindowFocus: false },
   );
+  const refetchSongUrl = songUrlQ.refetch;
   const lyricQ = trpc.netease.lyric.useQuery(
     { id: songId ?? 0 },
     { enabled: songId != null, retry: 1, refetchOnWindowFocus: false },
@@ -206,9 +208,9 @@ export default function Home() {
     document.documentElement.style.setProperty('--lyric-glow', th.lyricGlow);
   }, [themeIdx]);
 
-  // 天气切换：防御式调用（场景代理的 setWeather 可能尚未就绪）
+  // 天气切换：任何主题下可选任何天气（'auto' 跟随主题默认）
   useEffect(() => {
-    (worldRef.current as any)?.setWeather?.(weather);
+    worldRef.current?.setWeather(weather);
   }, [weather]);
 
   // 当前歌词行变化 → 列表平滑滚动跟随
@@ -248,24 +250,46 @@ export default function Home() {
     if (!d || songId == null) return;
     const engine = engineRef.current;
     if (!engine) return;
+    // 快速切歌守卫：旧歌曲的异步链路晚到时不得再写状态（否则会覆盖新歌的 UI）
+    let cancelled = false;
     if (d.playable) {
       setTrackLoading(true);
       // spectrum=true 走同源代理；false 为直连模式（网易云限制云出口时的降级，无频谱）
       engine
         .loadUrl(d.spectrum ? d.proxyUrl : d.url, { spectrum: d.spectrum })
-        .then(() => {
-          engine.play();
-          setPlaying(true);
-          setStarted(true);
+        .then(async () => {
+          if (cancelled) return;
+          try {
+            await engine.play();
+            if (cancelled) return;
+            setPlaying(true);
+            setStarted(true);
+          } catch {
+            if (!cancelled) setPlayError('播放被浏览器拦截，请再点一次播放按钮');
+          }
         })
-        .catch(() => setPlayError('音频加载失败，请稍后重试'))
-        .finally(() => setTrackLoading(false));
+        .catch(() => {
+          if (!cancelled) setPlayError('音频加载失败，请稍后重试');
+        })
+        .finally(() => {
+          if (!cancelled) setTrackLoading(false);
+        });
     } else {
       setPlayError(d.reason || 'VIP 歌曲，无法播放');
       setTrackLoading(false);
     }
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [songUrlQ.data, songId]);
+
+  // 取链请求本身失败（网络/接口错误）：必须复位加载态，否则 HUD 永远卡在「加载中…」
+  useEffect(() => {
+    if (songId == null || !songUrlQ.isError) return;
+    setTrackLoading(false);
+    setPlayError('获取播放地址失败，请重试');
+  }, [songId, songUrlQ.isError, songUrlQ.errorUpdatedAt]);
 
   // 网易云歌词：解析真实 LRC 时间轴
   useEffect(() => {
@@ -299,9 +323,23 @@ export default function Home() {
   const playNetease = useCallback(
     (song: NeteaseSong) => {
       if (song.id === currentSong?.id) {
+        const engine = engineRef.current;
+        // 上次取链/加载失败：同曲重试（不依赖 id 变化，手动重新取链）
+        if (playError && !engine?.isPlaying()) {
+          setPlayError(null);
+          setTrackLoading(true);
+          void refetchSongUrl();
+          return;
+        }
         // 已在播放列表里 → 直接继续
-        engineRef.current?.play();
-        setPlaying(true);
+        engine
+          ?.play()
+          .then(() => {
+            setPlayError(null);
+            setPlaying(true);
+            setStarted(true);
+          })
+          .catch(() => setPlayError('播放被浏览器拦截，请再点一次播放按钮'));
         setStarted(true);
         return;
       }
@@ -315,7 +353,7 @@ export default function Home() {
       setCurrentSong(song);
       setStarted(true);
     },
-    [currentSong?.id],
+    [currentSong?.id, playError, refetchSongUrl],
   );
 
   const begin = useCallback(async () => {
@@ -355,19 +393,30 @@ export default function Home() {
     if (engine.isPlaying()) {
       engine.pause();
       setPlaying(false);
-    } else {
-      if (engine.isDemo && engine.ctx?.state === 'suspended') engine.resumeDemo();
-      else engine.play();
-      setPlaying(true);
+      return;
     }
+    if (engine.isDemo && engine.ctx?.state === 'suspended') {
+      engine.resumeDemo();
+      setPlaying(true);
+      return;
+    }
+    engine
+      .play()
+      .then(() => {
+        setPlayError(null);
+        setPlaying(true);
+      })
+      .catch(() => setPlayError('播放被浏览器拦截，请再点一次播放按钮'));
   };
 
   const busy = trackLoading || (songId != null && songUrlQ.isFetching);
   // 直连模式（API 被网易云风控拒绝时的降级）：能播、能看歌词，但拿不到频谱
   const directPlay = songUrlQ.data?.playable === true && songUrlQ.data.spectrum === false;
+  // 歌词请求失败（网络/接口错误）：界面需要给出提示，否则完全无反馈
+  const lyricError = songId != null && lyricQ.isError;
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-black select-none">
+    <div className="fixed inset-0 overflow-clip bg-black select-none">
       <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" />
 
       {/* 3D flying lyrics layer（currentTime 精确同步） */}
@@ -507,11 +556,10 @@ export default function Home() {
                   </div>
                 )}
                 {playError && <div className="mt-0.5 text-[11px] text-red-300/90">{playError}</div>}
-                {directPlay && !busy && !playError && (
-                  <div className="mt-0.5 text-[11px] text-white/40">直连播放（当前网络下无频谱）</div>
-                )}
-                {pureMusic && !busy && !playError && (
-                  <div className="mt-0.5 text-[11px] text-white/40">纯音乐，请欣赏</div>
+                {!busy && !playError && (directPlay || pureMusic) && (
+                  <div className="mt-0.5 text-[11px] text-white/40">
+                    {directPlay ? '直连播放（当前网络下无频谱）' : '纯音乐，请欣赏'}
+                  </div>
                 )}
               </div>
             </div>
@@ -572,14 +620,16 @@ export default function Home() {
                                 );
                                 const writeDur = perChar * chars.length;
                                 return (
-                                  <>
+                                  // 书写容器：笔尖轨道 = 文字实际宽度（inline-block），
+                                  // 否则笔尖会越过文字末尾飘到整行右侧空白处
+                                  <span className="lyric-write-wrap">
                                     {chars.map((ch, ci) => (
                                       <span
                                         key={ci}
                                         className="lyric-char lyric-char-write"
                                         style={{ animationDelay: `${(ci * perChar).toFixed(0)}ms` }}
                                       >
-                                        {ch === ' ' ? ' ' : ch}
+                                        {ch === ' ' ? '\u00A0' : ch}
                                       </span>
                                     ))}
                                     {/* 发光笔尖：随揭示进度左→右移动，揭完淡出 */}
@@ -587,7 +637,7 @@ export default function Home() {
                                       className="lyric-pen"
                                       style={{ animationDuration: `${writeDur.toFixed(0)}ms` }}
                                     />
-                                  </>
+                                  </span>
                                 );
                               })()
                             : l.text}
@@ -617,37 +667,74 @@ export default function Home() {
             </div>
           )}
 
-          {/* 主题切换（从 themes 列表遍历生成） */}
-          <div className="absolute right-5 top-5 z-20 flex flex-col items-end gap-2">
-            {THEMES.map((th, i) => (
+          {/* 歌词获取失败：避免界面彻底无反馈 */}
+          {lyricError && lyrics.length === 0 && !busy && !pureMusic && (
+            <div className="pointer-events-none absolute bottom-24 left-1/2 z-10 -translate-x-1/2 text-center">
+              <div className="text-xs text-white/40">歌词获取失败</div>
+            </div>
+          )}
+
+          {/* 主题切换 + 天气菜单：并排一行（整簇高度不向下延伸，避免与右侧居中的歌词面板重叠） */}
+          <div className="absolute right-5 top-5 z-20 flex items-start gap-2">
+            {/* 天气二级菜单：默认收起为单个按钮，点开选择后自动收起 */}
+            <div className="relative">
               <button
-                key={th.id}
-                onClick={() => setThemeIdx(i)}
-                className={`rounded-full border px-4 py-1.5 font-serif-sc text-sm tracking-wider backdrop-blur transition ${
-                  i === themeIdx
+                onClick={() => setWeatherOpen((v) => !v)}
+                title="选择天气"
+                aria-expanded={weatherOpen}
+                className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm backdrop-blur transition ${
+                  weatherOpen
                     ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
                     : 'border-white/10 bg-black/40 text-white/55 hover:text-white/85'
                 }`}
               >
-                {th.name}
+                {(() => {
+                  const cur = WEATHER_OPTIONS.find((o) => o.mode === weather) ?? WEATHER_OPTIONS[0];
+                  const CurIcon = cur.Icon;
+                  return (
+                    <>
+                      <CurIcon className="h-3.5 w-3.5" />
+                      {cur.label}
+                    </>
+                  );
+                })()}
               </button>
-            ))}
+              {weatherOpen && (
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 flex max-w-[min(88vw,300px)] flex-wrap justify-end gap-1.5 rounded-2xl border border-white/10 bg-black/60 p-2 shadow-xl backdrop-blur">
+                  {WEATHER_OPTIONS.map(({ mode, label, Icon }) => (
+                    <button
+                      key={mode}
+                      onClick={() => {
+                        setWeather(mode);
+                        setWeatherOpen(false);
+                      }}
+                      title={label}
+                      className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs backdrop-blur transition ${
+                        weather === mode
+                          ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
+                          : 'border-white/10 bg-white/5 text-white/55 hover:text-white/85'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-            {/* 天气二级菜单 */}
-            <div className="mt-2 flex max-w-[min(88vw,300px)] flex-wrap justify-end gap-1.5 rounded-2xl border border-white/10 bg-black/40 p-2 backdrop-blur">
-              {WEATHER_OPTIONS.map(({ mode, label, Icon }) => (
+            <div className="flex flex-col items-end gap-2">
+              {THEMES.map((th, i) => (
                 <button
-                  key={mode}
-                  onClick={() => setWeather(mode)}
-                  title={label}
-                  className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs backdrop-blur transition ${
-                    weather === mode
+                  key={th.id}
+                  onClick={() => setThemeIdx(i)}
+                  className={`rounded-full border px-4 py-1.5 font-serif-sc text-sm tracking-wider backdrop-blur transition ${
+                    i === themeIdx
                       ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
-                      : 'border-white/10 bg-white/5 text-white/55 hover:text-white/85'
+                      : 'border-white/10 bg-black/40 text-white/55 hover:text-white/85'
                   }`}
                 >
-                  <Icon className="h-3.5 w-3.5" />
-                  {label}
+                  {th.name}
                 </button>
               ))}
             </div>

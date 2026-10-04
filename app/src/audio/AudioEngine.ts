@@ -150,11 +150,14 @@ export class AudioEngine {
     this.demoTimer = window.setInterval(tick, 1000);
   }
 
-  play() {
+  /** 返回播放 Promise：自动播放被浏览器拦截时调用方需要感知（否则 UI 与真实播放脱节） */
+  play(): Promise<void> {
     this.ensureCtx();
     if (this.isDemo) {
-      // resume demo scheduling from pause
-    } else this.el?.play();
+      // resume demo scheduling from pause（demo 的续播走 resumeDemo）
+      return Promise.resolve();
+    }
+    return this.el?.play() ?? Promise.resolve();
   }
   pause() {
     if (this.isDemo) {
