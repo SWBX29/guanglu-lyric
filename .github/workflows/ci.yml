@@ -1,0 +1,83 @@
+# CI：push / PR 自动跑「类型检查 + 回归测试 + 构建 + Worker 打包预演」；
+# push 到 master（或手动触发）且已配置 CLOUDFLARE_API_TOKEN 时发布到 Cloudflare Workers。
+#
+# 关键约定（背景见 docs/HANDOFF.md）：
+# - 工作目录是 app/（仓库根只放 docs 与治理文件）
+# - npm ci --ignore-scripts：本机验证过跳过生命周期脚本即可跑通全链路（§8 陷阱 2）
+# - 部署凭据：repository secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# 不需要写权限：部署用的是 Cloudflare token，不是 GITHUB_TOKEN
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # PR 上取消旧运行省额度；push（可能含部署）不取消，避免打断发布
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: 检查 + 测试 + 构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # 与本机 v24.14.1 对齐
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: 安装依赖（跳过生命周期脚本）
+        run: npm ci --ignore-scripts
+      - name: 类型检查（前端 + Worker 双目标）
+        run: npm run check
+      - name: 回归测试
+        run: npm run test
+      - name: 前端构建
+        run: npm run build
+      - name: Worker 打包预演（wrangler deploy --dry-run）
+        run: npm run build:worker
+
+  deploy:
+    name: 部署到 Cloudflare Workers（仅 master push / 手动触发）
+    needs: verify
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: 安装依赖（跳过生命周期脚本）
+        run: npm ci --ignore-scripts
+      - name: 检查部署凭据
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice title=跳过部署::未配置 CLOUDFLARE_API_TOKEN（见 docs/HANDOFF.md §12），本次只验证不发布。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 构建并发布
+        if: steps.creds.outputs.skip != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy
