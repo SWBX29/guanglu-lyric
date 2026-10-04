@@ -158,9 +158,10 @@ export async function deleteByHash(db: AppDb, tokenHash: string): Promise<void> 
   await db.delete(neteaseSessions).where(eq(neteaseSessions.tokenHash, tokenHash));
 }
 
-/** 懒清理过期会话（可挂 Cron Trigger；免费档每账号 5 个，官方核验可用） */
-export async function purgeExpiredSessions(db: AppDb): Promise<void> {
-  await db.delete(neteaseSessions).where(lt(neteaseSessions.expiresAt, new Date()));
+/** 懒清理过期会话（可挂 Cron Trigger；免费档每账号 5 个，官方核验可用）；返回删除行数供审计 */
+export async function purgeExpiredSessions(db: AppDb): Promise<number> {
+  const result = await db.delete(neteaseSessions).where(lt(neteaseSessions.expiresAt, new Date()));
+  return result.meta.changes;
 }
 
 /** 无条件 Secure：自定义域/workers.dev 均为 HTTPS，无合法明文场景 */

@@ -1,8 +1,10 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContextFactory } from "./context";
 import { requireBindings, type Bindings } from "./lib/env";
+import { purgeOldAuditEvents, recordAudit, recordProxyRejection } from "./lib/audit";
 import { verifyAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
 import { getSession, purgeExpiredSessions } from "./neteaseSession";
@@ -26,6 +28,18 @@ app.use("*", async (c, next) => {
   c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 });
 
+/**
+ * 审计辅助：代理拒绝事件（节流在 lib/audit.ts 内部；绑定缺失时静默跳过，
+ * 绝不因审计改变响应）。waitUntil 不阻塞响应。
+ */
+function auditProxyRejection(c: Context<{ Bindings: Bindings }>, reason: string): void {
+  const env = c.env;
+  if (!env.DB || !env.COOKIE_ENC_KEY) return;
+  c.executionCtx.waitUntil(
+    recordProxyRejection(createDb(env.DB), env.COOKIE_ENC_KEY, c.req.raw, reason),
+  );
+}
+
 /** 健康检查：用于部署后冒烟与保活，不回显任何绑定内容 */
 app.get("/api/health", (c) => {
   const hasDb = Boolean(c.env.DB);
@@ -38,12 +52,14 @@ app.get("/api/health", (c) => {
 app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
   const id = c.req.query("id");
   if (!id || !/^\d+$/.test(id) || id.length > 20) {
+    auditProxyRejection(c, "invalid id");
     return c.json({ error: "invalid id" }, 400);
   }
   const env = requireBindings(c.env);
   // ① 同源校验：现代浏览器从第三方页面发起的媒体请求会带 Sec-Fetch-Site: cross-site
   const site = c.req.header("sec-fetch-site");
   if (site && site !== "same-origin" && site !== "none") {
+    auditProxyRejection(c, "cross-site");
     return c.json({ error: "forbidden", reason: "cross-site" }, 403);
   }
   // ② 验签必须在 weapi 之前：一次 HMAC 远比"先做双层 AES + BigInt 模幂再出站"便宜
@@ -54,6 +70,7 @@ app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
     env.PROXY_SIGN_KEY ?? env.COOKIE_ENC_KEY,
   );
   if (!token.ok) {
+    auditProxyRejection(c, token.reason);
     return c.json({ error: "forbidden", reason: token.reason }, 403);
   }
   const session = await getSession(createDb(env.DB), env.COOKIE_ENC_KEY, c.req.raw);
@@ -110,6 +127,13 @@ app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 export default {
   fetch: (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, env, ctx),
   async scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(purgeExpiredSessions(createDb(requireBindings(env).DB)));
+    const db = createDb(requireBindings(env).DB);
+    ctx.waitUntil(
+      (async () => {
+        const purged = await purgeExpiredSessions(db);
+        await recordAudit(db, "session_expired_purge", { meta: { purged } });
+        await purgeOldAuditEvents(db); // 审计事件保留 90 天
+      })(),
+    );
   },
 } satisfies ExportedHandler<Bindings>;

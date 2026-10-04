@@ -2,6 +2,7 @@ import { z } from "zod";
 import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
 import { createRouter, protectedQuery, publicQuery } from "./middleware";
+import { hashSubject, recordAudit } from "./lib/audit";
 import { buildProxyUrl, signAudioToken } from "./lib/proxyToken";
 import {
   clearQrBindCookie,
@@ -145,6 +146,10 @@ export const neteaseRouter = createRouter({
       });
       setSessionCookie(ctx.resHeaders, token);
       clearQrBindCookie(ctx.resHeaders); // 绑定用一次即弃
+      // 审计：扫码登录成功（主体只落 uid 的 HMAC 哈希，绝不落原文）
+      await recordAudit(ctx.db, "login_success", {
+        subjectHash: userId ? await hashSubject(ctx.cookieKey, userId) : null,
+      });
       return { code, status: "success", message: message || "登录成功" };
     }),
 
@@ -162,8 +167,17 @@ export const neteaseRouter = createRouter({
 
   /** 退出登录 */
   logout: publicQuery.mutation(async ({ ctx }): Promise<{ ok: true }> => {
+    // 审计需要主体：先读会话，再销毁（会话不存在时保持旧行为：静默成功）
+    const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
     await destroySession(ctx.db, ctx.req);
     clearSessionCookie(ctx.resHeaders);
+    if (session) {
+      await recordAudit(ctx.db, "logout", {
+        subjectHash: session.neteaseUserId
+          ? await hashSubject(ctx.cookieKey, session.neteaseUserId)
+          : null,
+      });
+    }
     return { ok: true };
   }),
 

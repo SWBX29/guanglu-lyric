@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
  * 网易云登录会话表（Cloudflare D1 / SQLite）。
@@ -29,3 +29,31 @@ export const neteaseSessions = sqliteTable("netease_sessions", {
 
 export type NeteaseSession = typeof neteaseSessions.$inferSelect;
 export type NewNeteaseSession = typeof neteaseSessions.$inferInsert;
+
+/**
+ * 审计事件表（收尾项 3：只记事件与哈希，绝不记 cookie / 原始 IP / uid）。
+ *
+ * - event_type：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`
+ * - subject_hash：主体（netease uid / 客户端 IP）的 HMAC-SHA256——库被读走也无法反推原值
+ * - meta：非敏感元数据 JSON（如拒绝原因、清理条数）
+ * - created_at：与 netease_sessions 同口径的毫秒时间戳；Cron 每日清理超 90 天旧事件
+ *
+ * 注意：代理拒绝是攻击者可放大的写入路径，写入侧带节流（见 api/lib/audit.ts），
+ * 避免审计反而成为打爆 D1 免费写额度的入口。
+ */
+export const auditEvents = sqliteTable(
+  "audit_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    eventType: text("event_type").notNull(),
+    subjectHash: text("subject_hash"),
+    meta: text("meta"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [index("audit_events_created_at_idx").on(table.createdAt)],
+);
+
+export type AuditEvent = typeof auditEvents.$inferSelect;
+export type NewAuditEvent = typeof auditEvents.$inferInsert;
