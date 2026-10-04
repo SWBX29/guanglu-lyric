@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
 import { createRouter, publicQuery } from "./middleware";
 import type { TrpcContext } from "./context";
+import { buildProxyUrl, signAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
 import {
   createSession,
@@ -187,10 +188,10 @@ export const neteaseRouter = createRouter({
       return fillCovers(songs.map(mapSong), session.neteaseCookie);
     }),
 
-  /** 播放地址（匿名可用）。可播返回直链 + 本站代理地址 */
+  /** 播放地址（匿名可用）。可播返回直链 + 本站代理地址（带短时效签名） */
   songUrl: publicQuery
     .input(z.object({ id: z.number().int().positive() }))
-    .query(async ({ input }): Promise<NeteaseSongUrlResult> => {
+    .query(async ({ ctx, input }): Promise<NeteaseSongUrlResult> => {
       const res = await ncm.songUrlV1(input.id);
       const data = res.body?.data?.[0];
       if (!data?.url) {
@@ -199,12 +200,14 @@ export const neteaseRouter = createRouter({
           (data?.fee === 1 || data?.fee === 4 ? "VIP/付费歌曲，暂无播放权限" : `无法获取播放地址(code: ${data?.code ?? res.body?.code ?? "?"})`);
         return { playable: false, reason };
       }
+      // 代理地址必须携带签名与过期时间：第三方无法凭空拼出可用 URL（评审 B1/D5）
+      const { exp, sig } = await signAudioToken(String(input.id), ctx.proxyKey);
       return {
         playable: true,
         url: data.url,
         br: data.br ?? 0,
         type: data.type ?? "",
-        proxyUrl: `/api/proxy/audio?id=${input.id}`,
+        proxyUrl: buildProxyUrl(String(input.id), exp, sig),
       };
     }),
 

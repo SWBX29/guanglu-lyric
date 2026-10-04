@@ -65,10 +65,10 @@
 8. [x] 音频代理：HEAD 短路、`content-encoding` 时不再透传 `content-length`、**删除 `ACAO:*`**、id 限长
 9. [x] zod 升到 `^4.6.5`（≥4.5.0，官方对 Workers 内存的要求）；移除冗余的 `@cloudflare/workers-types`（已被 `wrangler types` 产物取代）
 
-### P2 · 加固与清理（未完成，按放行条件 G8 排序）
-- [ ] 音频代理 **HMAC 短时效签名令牌**（D5/B1：当前仍是无令牌可匿名转发，只是不再下发 `ACAO:*`）→ 需同时改 [neteaseRouter.ts](../app/api/neteaseRouter.ts) 的 `songUrl.proxyUrl` 与代理路由
+### P2 · 加固与清理
+- [x] 音频代理 **HMAC 短时效签名令牌**（D5/B1）：新增 [api/lib/proxyToken.ts](../app/api/lib/proxyToken.ts)；`songUrl` 下发带签名代理地址，代理路由**先验签再做 weapi**；叠加 `Sec-Fetch-Site: cross-site` 拒绝；无 Range 时主动限定 8 MiB 单请求分片（M7）。TTL 取 6 小时（媒体元素整首歌持续发 Range 请求，过短 TTL 会中途断流）
 - [ ] 登录绑定 `qr_bind`（H2：跨站 `qrcodeCheck` 可致会话注入）
-- [ ] `_headers` 安全头与 CSP（放行 Google Fonts）、`protectedQuery` 中间件（M2）、Cron 会话清理（免费档 5 个/账号）、审计日志（不记 cookie）、前端轮询降频、删 [api/lib/http.ts](../app/api/lib/http.ts) 死代码、`.env.example` 修正（无 JWT）
+- [ ] `_headers` 安全头与 CSP（放行 Google Fonts）、`protectedQuery` 中间件（M2）、Cron 会话清理（免费档 5 个/账号）、审计日志（不记 cookie）、前端轮询降频、删 [api/lib/http.ts](../app/api/lib/http.ts) 死代码、`.env.example` 修正（无 JWT）、上游错误文案收敛（L3）
 
 ---
 
@@ -86,6 +86,9 @@
 | V8 | **二维码在无 DOM Worker 中可用**（A-03/R6 判定点） | curl `netease.qrcodeCreate` | ✅ HTTP 200，真实 unikey + `data:image/svg+xml;base64,…`（3226 字符）→ **SVG 路径确证可行** |
 | V9 | 会话全链路（D1 读 + AES-GCM 解密） | 注入会话行 + curl 带 cookie | ✅ 有效会话→`{loggedIn:true,userId:"90001",nickname:"e2e-user"}`；过期→`false`；畸形 `%`→HTTP 200（不 500，M3）；无 cookie→`false` |
 | V10 | 库内数据形态（H1 + 时间单位） | `node:sqlite` 直读本地库 | ✅ cookie 为 97 字符密文（`iv.ciphertext`）；过期行**已被懒清理**（仅剩 1 行）；`created_at=1791099700382` → `datetime(created_at/1000,'unixepoch')` = `2026-10-04 07:41:40`（无 1970/秒毫秒错配） |
+| V11 | 代理验签（B1/D5） | curl 代理端点 | ✅ 无签名→403 `missing token`；伪造签名→403 `bad signature`；有效签名但 `Sec-Fetch-Site: cross-site`→403 `cross-site`；非法 id→400 |
+| V12 | 代理取流 + 单请求上限（M7） | curl 有效签名 + 同源 | ✅ HTTP **206**，`size_download=8388608`（8 MiB 上限精确生效），正文为真实 MP3（ID3 头） |
+| V13 | 回归网规模 | `vitest run` | ✅ **35/35**（weapi 13 + 会话 13 + 代理令牌 9） |
 
 **仍未验证（需真实 CF 账号或生产环境，无法在本机取得）**：`wrangler deploy` 实际上线、**免费档 10 ms CPU 实测**（G5，本地 dev 未采集 CPU 时间）、1027/1102 真实触发、**网易云从 CF 出口 IP 的可达性**（G9，本机是经代理的本地出口，不代表 CF 边缘出口）、真实 `AnalyserNode` 频谱与拖动、iOS 兼容性。
 
