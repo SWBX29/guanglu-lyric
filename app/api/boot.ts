@@ -5,7 +5,7 @@ import { appRouter } from "./router";
 import { createContextFactory } from "./context";
 import { requireBindings, type Bindings } from "./lib/env";
 import { purgeOldAuditEvents, recordAudit, recordProxyRejection } from "./lib/audit";
-import { markApiFailed, outerSongUrl, shouldPreferOuter } from "./lib/songMedia";
+import { markApiFailed, outerSongUrl, OUTER_FETCH_HEADERS, shouldPreferOuter } from "./lib/songMedia";
 import { verifyAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
 import { getSession, purgeExpiredSessions } from "./neteaseSession";
@@ -96,7 +96,8 @@ app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
   upstreamHeaders["Range"] = range ?? "bytes=0-8388607";
   const upstream = await fetch(mediaUrl, {
     method: isHead ? "HEAD" : "GET",
-    headers: upstreamHeaders,
+    // 外链端点在空 UA 下会返回 302 错误链，必须显式带 UA（见 lib/songMedia.ts）
+    headers: { ...upstreamHeaders, ...OUTER_FETCH_HEADERS },
     redirect: "follow",
   });
   if (!upstream.ok && upstream.status !== 206) {
