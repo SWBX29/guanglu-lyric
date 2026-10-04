@@ -90,6 +90,21 @@
 | V12 | 代理取流 + 单请求上限（M7） | curl 有效签名 + 同源 | ✅ HTTP **206**，`size_download=8388608`（8 MiB 上限精确生效），正文为真实 MP3（ID3 头） |
 | V13 | 回归网规模 | `vitest run` | ✅ **35/35**（weapi 13 + 会话 13 + 代理令牌 9） |
 
+### 线上部署与生产验证（已完成）
+
+**线上地址：https://guanglu-lyric.1663988203.workers.dev** ｜ Worker 版本 `f98640c8-e2a4-40a3-a41c-e19f76e56d16`
+D1：`guanglu-lyric-db`（`a8f4b230-1181-4d24-9aaf-bc15a55f70d1`），远端迁移 `0000_init_netease_sessions.sql @ 08:17:26`；secrets：`COOKIE_ENC_KEY`、`PROXY_SIGN_KEY`
+
+| # | 检查 | 结果 |
+|---|---|---|
+| V14 | `npm run deploy` | ✅ Worker gzip **217.84 KiB**、startup **23 ms**、6 个静态资源上传、bindings `env.DB` + `env.ENVIRONMENT` |
+| V15 | **G9 网易云从 CF 边缘出口可达**（此前最大未知项） | ✅ HTTP 200 + **真实 unikey** + `data:image/svg+xml;base64` 二维码 → weapi 从 Cloudflare 出口完全可用 |
+| V16 | 线上匿名搜索 | ✅ 200，返回真实网易云结果（含封面 URL、duration、fee） |
+| V17 | 线上路由与安全 | ✅ `/api/health` `{ok:true,storage:true,key:true}`；`/api/nope` → JSON 404；`/summary/` → 200（`/summary/index.html` 被 CF 以 307 归一化到 `/summary/`，属平台预期行为）；代理无签名 → 403 `missing token` |
+| V18 | **G5 免费档 CPU 实测**（`wrangler tail`） | ⚠️ **全程无一次 1102**。实测（单位 ms，已用 wallTime 与 curl 实测耗时交叉确认）：`health` 2 / `me` 11 / `qrcodeCreate` 101 / `searchSongs` 82 / `songUrl` 123。峰值**高于文档的 10 ms 名义上限却被容忍**（官方：isolate 对偶发超限有内置弹性）→ 列为**需持续观察项**，不是当前阻断项 |
+
+若后续流量增大出现 1102，按收益排序的瘦身手段：① `songUrl`/`lyric` 结果加平台缓存（同 id 命中缓存即零 CPU）；② 二维码改为前端渲染（服务端只回 `key`，但需与 H2 的登录绑定一起评估）；③ 把 weapi 的 JSON 解析/校验链从 zod 换成手写守卫。
+
 **仍未验证（需真实 CF 账号或生产环境，无法在本机取得）**：`wrangler deploy` 实际上线、**免费档 10 ms CPU 实测**（G5，本地 dev 未采集 CPU 时间）、1027/1102 真实触发、**网易云从 CF 出口 IP 的可达性**（G9，本机是经代理的本地出口，不代表 CF 边缘出口）、真实 `AnalyserNode` 频谱与拖动、iOS 兼容性。
 
 **本机环境注意事项（后续复现用）**：`wrangler dev` 可用；但 `wrangler d1 execute` 在部分时点会因 workerd 无法创建 `miniflare-email-store` 目录而启动失败 —— 此时改用 Node 24 内置 `node:sqlite` 直读 `.wrangler/state/v3/d1/**/*.sqlite`（本文件 V10 即此法）。另外 PowerShell 的 `Invoke-WebRequest -Headers@{Cookie=…}` **不会真正发出 Cookie 头**，冒烟测试必须用 `curl.exe -H "Cookie: …"`（曾因此误判为会话缺陷）。

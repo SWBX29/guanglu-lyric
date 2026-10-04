@@ -17,18 +17,20 @@
   "observability": {
     "enabled": true
   },
+  // 只允许一个 D1 绑定，且名字必须是 DB —— api/lib/env.ts 的 Bindings.DB 与
+  // `wrangler d1 migrations apply DB` 的库名都依赖它。
+  // （注意：`wrangler d1 create` 可能会额外追加一条 binding，重复条目要删掉。）
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "guanglu-lyric-db",
-      // 占位符：由 `wrangler d1 create guanglu-lyric-db` 输出的 database_id 替换
-      "database_id": "D1_DATABASE_ID_PLACEHOLDER",
+      "database_id": "a8f4b230-1181-4d24-9aaf-bc15a55f70d1",
       // drizzle-kit 生成的迁移 SQL 落在此目录，由 wrangler 负责应用
       "migrations_dir": "db/migrations"
     }
   ],
   // 非敏感配置放这里；COOKIE_ENC_KEY / PROXY_SIGN_KEY 必须用 `wrangler secret put` 注入，
-  // 绝不能进 [vars]（会入 git 且 dashboard 明文可见，评审 M5）
+  // 绝不能进 vars（会入 git 且 dashboard 明文可见，评审 M5）
   "vars": {
     "ENVIRONMENT": "production"
   }
