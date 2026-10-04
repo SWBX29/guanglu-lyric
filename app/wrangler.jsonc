@@ -14,6 +14,17 @@
     // SPA 深链回落到 index.html；因 /api/* 已被 run_worker_first 拦截，不会遮蔽 API
     "not_found_handling": "single-page-application"
   },
+  // 自定义域名（§12 收尾项 2，改善墙内可达性）：DNS 记录与证书由 wrangler/CF 自动管理。
+  // 注意：CI 部署同样读取本配置；若 CI 的 CLOUDFLARE_API_TOKEN 无该 zone 的路由权限，
+  // deploy 会失败（届时按 docs/HANDOFF.md §12 处理）。
+  "routes": [
+    { "pattern": "lyric.swbx.cc.cd", "custom_domain": true }
+  ],
+  // wrangler 检测到 routes 时会默认停用 workers.dev —— 显式保留，两个入口同时可用
+  // （免费额度内无额外成本；静态资源免费，见 docs/HANDOFF.md §0/§7）。
+  "workers_dev": true,
+  // 不使用预览部署：显式关闭 Preview URLs（否则 workers_dev 开启时会默认打开）
+  "preview_urls": false,
   "observability": {
     "enabled": true
   },

@@ -9,7 +9,7 @@
 
 | 项目 | 状态 |
 |---|---|
-| **线上地址** | https://guanglu-lyric.1663988203.workers.dev |
+| **线上地址** | **https://lyric.swbx.cc.cd**（自定义域名，推荐）+ https://guanglu-lyric.1663988203.workers.dev（保留，双入口实测可用） |
 | **当前 Worker 版本** | `8ddf40c7-d850-4cdd-a12f-7e972237ceca`（2026-10-04 首次由 CI 发布，gzip 218.87 KiB / startup 21 ms）。**注意：此后每次 master push 都会由 CI 自动重新发布，最新版本以 `wrangler deployments list` 为准** |
 | Cloudflare 账号 | `1663988203@qq.com's Account` / account id `c5b214ba182d8c1a2880bff2613c2bb8`（OAuth 已登录，凭据存于本机 wrangler 配置） |
 | D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；远端已应用迁移 `0000`（会话表）+ `0001`（audit_events） |
@@ -228,7 +228,7 @@
 | **播放 + 频谱 + 拖动 seek** | 逻辑与代理已验证（206 + 8 MiB + MP3 字节），但没在浏览器里听过 |
 | **iOS/Safari 兼容** | `AudioContext` 手势要求、`crossOrigin` + Range 行为未实测 |
 | **G5 CPU 持续观察** | 102–123 ms 峰值高于文档 10 ms 名义值却未被拒（isolate 弹性）；若流量增大出现 `1102`，瘦身顺序：① `songUrl`/`lyric` 加平台缓存 ② 二维码改前端渲染（需与 H2 绑定一起评估）③ weapi 链路去 zod |
-| **`workers.dev` 在墙内可达性** | 大陆访问常被干扰；要面向墙内用户需绑自定义域名 |
+| **墙内可达性** | 本机直连 workers.dev 被黑洞（经代理可达）；已绑自定义域名 `lyric.swbx.cc.cd`（§12-2），但其可达性同样受 CF 边缘 IP 干扰情况影响，属尽力而为 |
 | **未做（非阻断）** | 上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销 |
 
 ---
@@ -306,9 +306,9 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 ## 12. 收尾进展（按价值排序）
 
 1. **GitHub CI —— ✅ 已完成（2026-10-04）**：仓库 `https://github.com/SWBX29/guanglu-lyric`（Public）；工作流 `.github/workflows/ci.yml`：
-   - `verify`（push / PR / 手动）：`npm ci --ignore-scripts` → `tsc -b` → 44 测试 → `vite build` → `wrangler deploy --dry-run`；实测 **38–39s 全绿**。
-   - `deploy`（仅 master push / 手动触发；门控在 `CLOUDFLARE_API_TOKEN` 是否存在，缺失时打 notice 跳过）：`npm run deploy`；实测 **32s 发布成功**（版本 `8ddf40c7`）。
+   - `verify`（push / PR / 手动）：`npm ci --ignore-scripts` → `tsc -b` → 55 测试 → `vite build` → `wrangler deploy --dry-run`；实测 **29–39s 全绿**。
+   - `deploy`（仅 master push / 手动触发；门控在 `CLOUDFLARE_API_TOKEN` 是否存在，缺失时打 notice 跳过）：`npm run deploy`；实测 **25–32s 发布成功**。
    - Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 均已配置。**校验 token 要用账户级端点** `GET /client/v4/accounts/<id>/tokens/verify`（`/user/tokens/verify` 对账户 token 会误报 Invalid，别被误导）。
    - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
-2. **自定义域名**：解决墙内可达性（本网络实测 workers.dev 边缘 IP 被黑洞）；需用户提供域名（Cloudflare 免费支持，配置为 `wrangler.jsonc` 的 `routes` 或 dashboard 绑定）。
+2. **自定义域名 —— ✅ 已完成（2026-10-04）**：`lyric.swbx.cc.cd`（zone `swbx.cc.cd`，同账户）已绑定，DNS 与证书由 CF 自动管理；实测双入口同时可用（自定义域名 + workers.dev，后者以 `workers_dev: true` 显式保留——wrangler 检测到 routes 会默认停用它）。绑定路径：`wrangler.jsonc` 的 `routes[].custom_domain`，由本地 wrangler OAuth 部署完成（账户 API token 调 `/accounts/*/workers/domains` 返回 10405，不能用于绑定；CI 部署只读既有绑定）。另显式 `preview_urls: false`，关闭未使用的预览 URL。
 3. **审计日志 —— ✅ 已完成（2026-10-04）**：新增 `audit_events` 表（迁移 `0001`，本地与远端均已应用）。四类事件：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`；主体只落 HMAC-SHA256（netease uid / 客户端 IP），绝不落 cookie 与明文 IP；代理拒绝带「每 isolate × 每 reason × 60s 最多一行」防刷节流（避免滥用流量借审计打爆 D1 免费写额度）；Cron 每日顺带清理超 90 天旧事件。端到端验证见 §6 V28。
