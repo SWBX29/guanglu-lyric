@@ -5,6 +5,7 @@ import { appRouter } from "./router";
 import { createContextFactory } from "./context";
 import { requireBindings, type Bindings } from "./lib/env";
 import { purgeOldAuditEvents, recordAudit, recordProxyRejection } from "./lib/audit";
+import { markApiFailed, outerSongUrl, shouldPreferOuter } from "./lib/songMedia";
 import { verifyAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
 import { getSession, purgeExpiredSessions } from "./neteaseSession";
@@ -74,23 +75,37 @@ app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
     return c.json({ error: "forbidden", reason: token.reason }, 403);
   }
   const session = await getSession(createDb(env.DB), env.COOKIE_ENC_KEY, c.req.raw);
-  const urlRes = await ncm.songUrlV1(id, session?.neteaseCookie);
-  const data = urlRes.body?.data?.[0];
-  if (!data?.url) {
-    return c.json({ error: "unplayable", reason: data?.message ?? "no url" }, 404);
+  // 解析媒体地址：API 直链优先；对 CF 出口被区域限制时回退外链端点（lib/songMedia.ts）
+  let mediaUrl: string | null = null;
+  if (!shouldPreferOuter(id)) {
+    const urlRes = await ncm.songUrlV1(id, session?.neteaseCookie);
+    const data = urlRes.body?.data?.[0];
+    if (data?.url) {
+      mediaUrl = data.url;
+    } else if (data?.fee === 1 || data?.fee === 4 || data?.message) {
+      return c.json({ error: "unplayable", reason: data?.message ?? "VIP/付费歌曲，暂无播放权限" }, 404);
+    } else {
+      markApiFailed(id); // 后续 Range 请求直接走外链，省掉一遍 weapi
+    }
   }
+  if (!mediaUrl) mediaUrl = outerSongUrl(id);
   const isHead = c.req.method === "HEAD";
   const upstreamHeaders: Record<string, string> = {};
   const range = c.req.header("range");
   // ③ 单请求字节上限：没有 Range 时主动限定首个分片，避免一次拉走整首文件（评审 M7）
   upstreamHeaders["Range"] = range ?? "bytes=0-8388607";
-  const upstream = await fetch(data.url, {
+  const upstream = await fetch(mediaUrl, {
     method: isHead ? "HEAD" : "GET",
     headers: upstreamHeaders,
     redirect: "follow",
   });
   if (!upstream.ok && upstream.status !== 206) {
     return c.json({ error: "upstream error", status: upstream.status }, 502);
+  }
+  // 外链兜底对不可播歌曲可能重定向到非音频内容：明确拒绝，避免把 HTML 当音频推给播放器
+  const upstreamType = upstream.headers.get("content-type") ?? "";
+  if (!/audio|octet-stream/.test(upstreamType)) {
+    return c.json({ error: "unplayable", reason: "not audio" }, 404);
   }
   const headers = new Headers();
   for (const h of ["content-type", "accept-ranges", "content-range"]) {

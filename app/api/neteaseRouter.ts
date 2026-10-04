@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
 import { createRouter, protectedQuery, publicQuery } from "./middleware";
 import { hashSubject, recordAudit } from "./lib/audit";
+import { markApiFailed, outerSongUrl, probeOuterPlayable, shouldPreferOuter } from "./lib/songMedia";
 import { buildProxyUrl, signAudioToken } from "./lib/proxyToken";
 import {
   clearQrBindCookie,
@@ -206,26 +207,47 @@ export const neteaseRouter = createRouter({
       return fillCovers(songs.map(mapSong), ctx.session.neteaseCookie);
     }),
 
-  /** 播放地址（匿名可用）。可播返回直链 + 本站代理地址（带短时效签名） */
+  /**
+   * 播放地址。**API 直链优先 + 外链兜底**：实测网易云取链 API 对 Cloudflare 出口
+   * 稳定返回 code 404（版权区域限制；同 id 中国出口正常），而公开外链端点在海外
+   * 出口可用（见 lib/songMedia.ts）。cookie 照常传入（有直链时权限/质量信息最全）。
+   */
   songUrl: publicQuery
     .input(z.object({ id: z.number().int().positive() }))
     .query(async ({ ctx, input }): Promise<NeteaseSongUrlResult> => {
-      const res = await ncm.songUrlV1(input.id);
-      const data = res.body?.data?.[0];
-      if (!data?.url) {
-        const reason =
-          data?.message ??
-          (data?.fee === 1 || data?.fee === 4 ? "VIP/付费歌曲，暂无播放权限" : `无法获取播放地址(code: ${data?.code ?? res.body?.code ?? "?"})`);
-        return { playable: false, reason };
+      const id = String(input.id);
+      if (!shouldPreferOuter(id)) {
+        const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
+        const res = await ncm.songUrlV1(input.id, session?.neteaseCookie);
+        const data = res.body?.data?.[0];
+        if (data?.url) {
+          // 代理地址必须携带签名与过期时间：第三方无法凭空拼出可用 URL（评审 B1/D5）
+          const { exp, sig } = await signAudioToken(id, ctx.proxyKey);
+          return {
+            playable: true,
+            url: data.url,
+            br: data.br ?? 0,
+            type: data.type ?? "",
+            proxyUrl: buildProxyUrl(id, exp, sig),
+          };
+        }
+        if (data?.message) return { playable: false, reason: data.message };
+        if (data?.fee === 1 || data?.fee === 4) {
+          return { playable: false, reason: "VIP/付费歌曲，暂无播放权限" };
+        }
+        // API 失败：探测外链是否真能出音频；成功则本 isolate 后续直接走外链
+        if (!(await probeOuterPlayable(id))) {
+          return { playable: false, reason: "该歌曲暂无法播放，可尝试扫码登录后重试" };
+        }
+        markApiFailed(id);
       }
-      // 代理地址必须携带签名与过期时间：第三方无法凭空拼出可用 URL（评审 B1/D5）
-      const { exp, sig } = await signAudioToken(String(input.id), ctx.proxyKey);
+      const { exp, sig } = await signAudioToken(id, ctx.proxyKey);
       return {
         playable: true,
-        url: data.url,
-        br: data.br ?? 0,
-        type: data.type ?? "",
-        proxyUrl: buildProxyUrl(String(input.id), exp, sig),
+        url: outerSongUrl(id),
+        br: 0,
+        type: "mp3",
+        proxyUrl: buildProxyUrl(id, exp, sig),
       };
     }),
 
