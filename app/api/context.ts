@@ -1,6 +1,7 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import { createDb, type AppDb } from "./queries/connection";
 import type { Bindings } from "./lib/env";
+import type { SessionView } from "./neteaseSession";
 
 export type TrpcContext = {
   req: Request;
@@ -11,6 +12,8 @@ export type TrpcContext = {
   cookieKey: string;
   /** 音频代理短时效签名密钥（评审 B1 / D5） */
   proxyKey: string;
+  /** 由 protectedQuery 中间件填充；公开 procedure 下为 undefined */
+  session?: SessionView;
 };
 
 /**

@@ -5,7 +5,7 @@ import { createContextFactory } from "./context";
 import { requireBindings, type Bindings } from "./lib/env";
 import { verifyAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
-import { getSession } from "./neteaseSession";
+import { getSession, purgeExpiredSessions } from "./neteaseSession";
 import { createDb } from "./queries/connection";
 
 /**
@@ -15,6 +15,16 @@ import { createDb } from "./queries/connection";
  * 也不再需要 `node:fs` 静态文件服务（评审 R3/R5：删除而不是 shim）。
  */
 const app = new Hono<{ Bindings: Bindings }>();
+
+/** 安全响应头（评审 L2）。静态资源侧的同等头由 public/_headers 下发。 */
+app.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+  c.res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  c.res.headers.set("X-Frame-Options", "DENY");
+  c.res.headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  c.res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+});
 
 /** 健康检查：用于部署后冒烟与保活，不回显任何绑定内容 */
 app.get("/api/health", (c) => {
@@ -92,4 +102,14 @@ app.use("/api/trpc/*", async (c) => {
 
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
-export default app;
+/**
+ * Worker 入口：既承接 HTTP，也承接 Cron。
+ * Cron 用于懒清理过期会话，避免明文 cookie 长期驻留在 D1（评审 L4）；
+ * 免费档每账号 5 个 Cron Triggers（官方文档核验）。
+ */
+export default {
+  fetch: (request: Request, env: Bindings, ctx: ExecutionContext) => app.fetch(request, env, ctx),
+  async scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(purgeExpiredSessions(createDb(requireBindings(env).DB)));
+  },
+} satisfies ExportedHandler<Bindings>;

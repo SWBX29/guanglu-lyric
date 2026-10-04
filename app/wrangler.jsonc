@@ -17,6 +17,10 @@
   "observability": {
     "enabled": true
   },
+  // 每天 04:23 UTC 清理过期会话（免费档每账号 5 个 Cron Triggers）
+  "triggers": {
+    "crons": ["23 4 * * *"]
+  },
   // 只允许一个 D1 绑定，且名字必须是 DB —— api/lib/env.ts 的 Bindings.DB 与
   // `wrangler d1 migrations apply DB` 的库名都依赖它。
   // （注意：`wrangler d1 create` 可能会额外追加一条 binding，重复条目要删掉。）

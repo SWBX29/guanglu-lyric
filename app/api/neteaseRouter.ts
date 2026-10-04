@@ -1,9 +1,14 @@
 import { z } from "zod";
 import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
-import { createRouter, publicQuery } from "./middleware";
-import type { TrpcContext } from "./context";
+import { createRouter, protectedQuery, publicQuery } from "./middleware";
 import { buildProxyUrl, signAudioToken } from "./lib/proxyToken";
+import {
+  clearQrBindCookie,
+  setQrBindCookie,
+  signQrBind,
+  verifyQrBind,
+} from "./lib/loginBind";
 import { ncm } from "./neteaseClient";
 import {
   createSession,
@@ -71,14 +76,7 @@ async function fillCovers(songs: NeteaseSong[], cookie?: string): Promise<Neteas
   }
 }
 
-/** 需要网易云登录：取会话或抛 401，返回解密后的网易云 cookie */
-async function requireNeteaseSession(ctx: TrpcContext) {
-  const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
-  if (!session) {
-    throw new TRPCError({ code: "UNAUTHORIZED", message: "请先扫码登录网易云音乐" });
-  }
-  return session;
-}
+/** 需要网易云登录的 procedure 统一走 `protectedQuery`（见 middleware.ts）。 */
 
 /**
  * 把 SVG 文本转成 data URL。
@@ -93,8 +91,8 @@ function svgToDataUrl(svg: string): string {
 }
 
 export const neteaseRouter = createRouter({
-  /** 第一步：申请 unikey 并生成二维码 dataURL */
-  qrcodeCreate: publicQuery.query(async (): Promise<NeteaseQrcodeCreateResult> => {
+  /** 第一步：申请 unikey 并生成二维码 dataURL；同时写下浏览器绑定 cookie */
+  qrcodeCreate: publicQuery.query(async ({ ctx }): Promise<NeteaseQrcodeCreateResult> => {
     const res = await ncm.loginQrKey();
     const key: string = res.body?.data?.unikey ?? res.body?.unikey;
     if (!key) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "获取 unikey 失败" });
@@ -103,6 +101,8 @@ export const neteaseRouter = createRouter({
       margin: 1,
       width: 320,
     });
+    // 绑定本次扫码到当前浏览器（评审 H2：阻断跨站的登录 CSRF/会话注入）
+    setQrBindCookie(ctx.resHeaders, await signQrBind(key, ctx.proxyKey));
     return { key, qrDataUrl: svgToDataUrl(svg) };
   }),
 
@@ -110,6 +110,11 @@ export const neteaseRouter = createRouter({
   qrcodeCheck: publicQuery
     .input(z.object({ key: z.string().min(1).max(128) }))
     .query(async ({ ctx, input }): Promise<NeteaseQrcodeCheckResult> => {
+      // 必须持有与 key 匹配的 qr_bind cookie，否则不建立任何会话。
+      // 复用 expired 语义让前端自动刷新二维码，避免新增契约字段。
+      if (!(await verifyQrBind(ctx.req, input.key, ctx.proxyKey))) {
+        return { code: 0, status: "expired", message: "二维码会话已失效，正在重新生成" };
+      }
       const res = await ncm.loginQrCheck(input.key);
       const code: number = res.body?.code ?? 0;
       const message: string = res.body?.message ?? "";
@@ -139,6 +144,7 @@ export const neteaseRouter = createRouter({
         avatarUrl,
       });
       setSessionCookie(ctx.resHeaders, token);
+      clearQrBindCookie(ctx.resHeaders); // 绑定用一次即弃
       return { code, status: "success", message: message || "登录成功" };
     }),
 
@@ -170,22 +176,20 @@ export const neteaseRouter = createRouter({
       return fillCovers(songs.map(mapSong));
     }),
 
-  /** 我的歌单（需登录） */
-  myPlaylists: publicQuery.query(async ({ ctx }): Promise<NeteasePlaylist[]> => {
-    const session = await requireNeteaseSession(ctx);
-    const res = await ncm.userPlaylist(session.neteaseUserId, session.neteaseCookie);
+  /** 我的歌单（需登录；protectedQuery 已保证 ctx.session 存在） */
+  myPlaylists: protectedQuery.query(async ({ ctx }): Promise<NeteasePlaylist[]> => {
+    const res = await ncm.userPlaylist(ctx.session.neteaseUserId, ctx.session.neteaseCookie);
     const playlists = res.body?.playlist ?? [];
     return playlists.map(mapPlaylist);
   }),
 
   /** 歌单歌曲（需登录） */
-  playlistTracks: publicQuery
+  playlistTracks: protectedQuery
     .input(z.object({ playlistId: z.number().int().positive() }))
     .query(async ({ ctx, input }): Promise<NeteaseSong[]> => {
-      const session = await requireNeteaseSession(ctx);
-      const res = await ncm.playlistTrackAll(input.playlistId, session.neteaseCookie);
+      const res = await ncm.playlistTrackAll(input.playlistId, ctx.session.neteaseCookie);
       const songs = res.body?.songs ?? [];
-      return fillCovers(songs.map(mapSong), session.neteaseCookie);
+      return fillCovers(songs.map(mapSong), ctx.session.neteaseCookie);
     }),
 
   /** 播放地址（匿名可用）。可播返回直链 + 本站代理地址（带短时效签名） */

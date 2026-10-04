@@ -11,6 +11,7 @@
 import { randomBytes } from "node:crypto";
 import { eq, lt } from "drizzle-orm";
 import type { AppDb } from "./queries/connection";
+import { readCookie } from "./lib/cookies";
 import { neteaseSessions } from "@db/schema";
 
 export const SESSION_COOKIE = "netease_session";
@@ -111,17 +112,7 @@ export async function createSession(
 }
 
 export function readSessionToken(req: Request): string | null {
-  const header = req.headers.get("cookie") ?? "";
-  for (const part of header.split(";")) {
-    const [k, ...rest] = part.trim().split("=");
-    if (k !== SESSION_COOKIE) continue;
-    try {
-      return decodeURIComponent(rest.join("="));
-    } catch {
-      return null; // 畸形百分号编码不应变成 500
-    }
-  }
-  return null;
+  return readCookie(req, SESSION_COOKIE);
 }
 
 export async function getSession(

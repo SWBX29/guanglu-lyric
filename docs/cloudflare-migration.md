@@ -67,8 +67,13 @@
 
 ### P2 · 加固与清理
 - [x] 音频代理 **HMAC 短时效签名令牌**（D5/B1）：新增 [api/lib/proxyToken.ts](../app/api/lib/proxyToken.ts)；`songUrl` 下发带签名代理地址，代理路由**先验签再做 weapi**；叠加 `Sec-Fetch-Site: cross-site` 拒绝；无 Range 时主动限定 8 MiB 单请求分片（M7）。TTL 取 6 小时（媒体元素整首歌持续发 Range 请求，过短 TTL 会中途断流）
-- [ ] 登录绑定 `qr_bind`（H2：跨站 `qrcodeCheck` 可致会话注入）
-- [ ] `_headers` 安全头与 CSP（放行 Google Fonts）、`protectedQuery` 中间件（M2）、Cron 会话清理（免费档 5 个/账号）、审计日志（不记 cookie）、前端轮询降频、删 [api/lib/http.ts](../app/api/lib/http.ts) 死代码、`.env.example` 修正（无 JWT）、上游错误文案收敛（L3）
+- [x] **登录浏览器绑定 `qr_bind`**（H2）：新增 [api/lib/loginBind.ts](../app/api/lib/loginBind.ts)。`qrcodeCreate` 下发 `HMAC(secret,"qr:"+key)` 的 httpOnly cookie（10 分钟）；`qrcodeCheck` 必须持有与 `key` 匹配的 cookie 才建会话，否则按 `expired` 语义返回（前端自动换码，不新增契约字段）。代价：同浏览器双标签扫码时后一个会覆盖绑定（已记录为接受项）
+- [x] **安全响应头 + CSP**（L2）：`/api/*` 由 [boot.ts](../app/api/boot.ts) 中间件下发（HSTS/nosniff/Referrer-Policy/X-Frame-Options/CORP）；静态资源由 [public/_headers](../app/public/_headers) 下发完整 CSP（放行 Google Fonts 与内联样式，`media-src 'self'` 只允许本站代理）
+- [x] **默认失败关闭的鉴权中间件**（M2）：[middleware.ts](../app/api/middleware.ts) 新增 `protectedQuery`，会话在中间件取好挂到 `ctx.session`；`myPlaylists` / `playlistTracks` 已改为受保护，公开 procedure 必须显式声明
+- [x] **Cron 清理过期会话**（L4）：Worker 默认导出增加 `scheduled`，配合 `wrangler.jsonc` 的 `triggers.crons = ["23 4 * * *"]`（免费档每账号 5 个）
+- [x] 前端扫码轮询降频（A-08）：2s → **3s 且最多轮询 60s**（[NeteasePanel.tsx](../app/src/components/NeteasePanel.tsx)）
+- [x] `.env.example` 重写（去 MySQL/dotenv/JWT 错误描述，改为 wrangler secret 说明）；删除死代码 [api/lib/http.ts](../app/api/lib/http.ts)、[db/relations.ts](../app/db/relations.ts)
+- [ ] 未做（非阻断，记录在案）：结构化审计日志（M8）、上游错误文案收敛（L3）、`chart.tsx` 的 `dangerouslySetInnerHTML`（L1，静态输入）、会话滑动续期/批量撤销（L4）
 
 ---
 
@@ -102,6 +107,11 @@ D1：`guanglu-lyric-db`（`a8f4b230-1181-4d24-9aaf-bc15a55f70d1`），远端迁�
 | V16 | 线上匿名搜索 | ✅ 200，返回真实网易云结果（含封面 URL、duration、fee） |
 | V17 | 线上路由与安全 | ✅ `/api/health` `{ok:true,storage:true,key:true}`；`/api/nope` → JSON 404；`/summary/` → 200（`/summary/index.html` 被 CF 以 307 归一化到 `/summary/`，属平台预期行为）；代理无签名 → 403 `missing token` |
 | V18 | **G5 免费档 CPU 实测**（`wrangler tail`） | ⚠️ **全程无一次 1102**。实测（单位 ms，已用 wallTime 与 curl 实测耗时交叉确认）：`health` 2 / `me` 11 / `qrcodeCreate` 101 / `searchSongs` 82 / `songUrl` 123。峰值**高于文档的 10 ms 名义上限却被容忍**（官方：isolate 对偶发超限有内置弹性）→ 列为**需持续观察项**，不是当前阻断项 |
+| V19 | 回归网规模（P2 后） | ✅ **44/44**（weapi 13 + 会话 13 + 代理令牌 9 + 登录绑定 9） |
+| V20 | 登录绑定 qr_bind（H2） | ✅ 生产实测：`qrcodeCreate` 下发 `qr_bind=…; HttpOnly; SameSite=Lax; Secure; Max-Age=600`；**不带绑定 cookie 的 `qrcodeCheck` 被本地拒绝**（`expired`）；带匹配 cookie 则进入网易云真实状态 `801 waiting`；**换成别的 key 同样被拒** |
+| V21 | 安全响应头 / CSP（L2） | ✅ 生产实测：`/api/health` 带 HSTS + nosniff + Referrer-Policy + X-Frame-Options + CORP；`/` 额外带完整 CSP（含 Google Fonts 与内联样式放行）与 Permissions-Policy |
+| V22 | 默认失败关闭的鉴权（M2） | ✅ 生产实测：未登录访问 `netease.myPlaylists` → `UNAUTHORIZED`（401），不再依赖逐个 handler 手工校验 |
+| V23 | Cron 与部署形态 | ✅ 部署输出 `schedule: 23 4 * * *`；Worker 版本 `324cfeba-66a9-480a-9395-87a8dfbb9ba2`；代理无签名仍 403（回归通过） |
 
 若后续流量增大出现 1102，按收益排序的瘦身手段：① `songUrl`/`lyric` 结果加平台缓存（同 id 命中缓存即零 CPU）；② 二维码改为前端渲染（服务端只回 `key`，但需与 H2 的登录绑定一起评估）；③ 把 weapi 的 JSON 解析/校验链从 zod 换成手写守卫。
 

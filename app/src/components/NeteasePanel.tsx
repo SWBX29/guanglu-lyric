@@ -31,13 +31,20 @@ function QrLogin() {
     staleTime: Infinity,
   });
   const key = qr.data?.key ?? '';
+  // 轮询要省着用（免费档请求配额）：3s 一次，且最多轮询 60s
+  const pollStartRef = useRef(0);
+  useEffect(() => {
+    pollStartRef.current = Date.now();
+  }, [key]);
   const check = trpc.netease.qrcodeCheck.useQuery(
     { key },
     {
       enabled: !!key,
       refetchInterval: (q) => {
         const s = q.state.data?.status;
-        return s === 'success' || s === 'expired' ? false : 2000;
+        if (s === 'success' || s === 'expired') return false;
+        if (Date.now() - (pollStartRef.current || Date.now()) > 60_000) return false;
+        return 3000;
       },
     },
   );

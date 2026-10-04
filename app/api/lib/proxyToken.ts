@@ -57,11 +57,16 @@ export async function signAudioToken(
 }
 
 /** 恒时比较，避免通过响应时间逐字节猜签名 */
-function timingSafeEqual(a: string, b: string): boolean {
+export function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+/** 通用 HMAC 签名（登录绑定等复用同一密钥派生方式） */
+export async function hmacSign(secret: string, message: string): Promise<string> {
+  return hmac(secret, message);
 }
 
 export async function verifyAudioToken(
@@ -76,7 +81,7 @@ export async function verifyAudioToken(
   if (!Number.isFinite(expNum)) return { ok: false, reason: "bad exp" };
   if (expNum < now) return { ok: false, reason: "expired" };
   const expected = await hmac(secret, `${id}.${expNum}`);
-  if (!timingSafeEqual(expected, sig)) return { ok: false, reason: "bad signature" };
+  if (!constantTimeEqual(expected, sig)) return { ok: false, reason: "bad signature" };
   return { ok: true };
 }
 
