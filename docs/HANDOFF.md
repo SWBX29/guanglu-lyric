@@ -143,6 +143,8 @@
 | `01f61a2` | docs：CI 上线并验证记录（§0/§5/§12） |
 | `22291cc` | docs：版本行改为可查询表述；§6 验证矩阵补 V26/V27 |
 | `abbbdad` | feat：结构化审计日志（login/logout/Cron 清理/代理拒绝；哈希 + 防刷节流 + 90 天保留） |
+| `00a41c1` | docs：HANDOFF 同步审计日志（V28 / §8 陷阱 14 / §12 等） |
+| `ccf72ff` | feat：绑定自定义域名 `lyric.swbx.cc.cd`（保留 workers.dev 双入口；关闭 Preview URLs） |
 
 ---
 
@@ -310,5 +312,5 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
    - `deploy`（仅 master push / 手动触发；门控在 `CLOUDFLARE_API_TOKEN` 是否存在，缺失时打 notice 跳过）：`npm run deploy`；实测 **25–32s 发布成功**。
    - Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 均已配置。**校验 token 要用账户级端点** `GET /client/v4/accounts/<id>/tokens/verify`（`/user/tokens/verify` 对账户 token 会误报 Invalid，别被误导）。
    - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
-2. **自定义域名 —— ✅ 已完成（2026-10-04）**：`lyric.swbx.cc.cd`（zone `swbx.cc.cd`，同账户）已绑定，DNS 与证书由 CF 自动管理；实测双入口同时可用（自定义域名 + workers.dev，后者以 `workers_dev: true` 显式保留——wrangler 检测到 routes 会默认停用它）。绑定路径：`wrangler.jsonc` 的 `routes[].custom_domain`，由本地 wrangler OAuth 部署完成（账户 API token 调 `/accounts/*/workers/domains` 返回 10405，不能用于绑定；CI 部署只读既有绑定）。另显式 `preview_urls: false`，关闭未使用的预览 URL。
+2. **自定义域名 —— ✅ 已完成（2026-10-04）**：`lyric.swbx.cc.cd`（zone `swbx.cc.cd`，同账户）已绑定，DNS 与证书由 CF 自动管理；实测双入口同时可用（自定义域名 + workers.dev，后者以 `workers_dev: true` 显式保留——wrangler 检测到 routes 会默认停用它）。绑定路径：`wrangler.jsonc` 的 `routes[].custom_domain`，由本地 wrangler OAuth 部署完成（账户 API token 调 `/accounts/*/workers/domains` 返回 10405，不能用于绑定）。另显式 `preview_urls: false`，关闭未使用的预览 URL。**CI 部署兼容性已实测通过**：push 携带该 routes 配置的 CI 部署全绿（run `37197981932`，deploy 31s）——CI token 对既有绑定是无操作，无需 zone 路由写权限。
 3. **审计日志 —— ✅ 已完成（2026-10-04）**：新增 `audit_events` 表（迁移 `0001`，本地与远端均已应用）。四类事件：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`；主体只落 HMAC-SHA256（netease uid / 客户端 IP），绝不落 cookie 与明文 IP；代理拒绝带「每 isolate × 每 reason × 60s 最多一行」防刷节流（避免滥用流量借审计打爆 D1 免费写额度）；Cron 每日顺带清理超 90 天旧事件。端到端验证见 §6 V28。
