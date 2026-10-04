@@ -10,7 +10,7 @@
 | 项目 | 状态 |
 |---|---|
 | **线上地址** | https://guanglu-lyric.1663988203.workers.dev |
-| **当前 Worker 版本** | `8ddf40c7-d850-4cdd-a12f-7e972237ceca`（2026-10-04 由 GitHub Actions CI 发布；gzip 218.87 KiB，startup 21 ms） |
+| **当前 Worker 版本** | `8ddf40c7-d850-4cdd-a12f-7e972237ceca`（2026-10-04 首次由 CI 发布，gzip 218.87 KiB / startup 21 ms）。**注意：此后每次 master push 都会由 CI 自动重新发布，最新版本以 `wrangler deployments list` 为准** |
 | Cloudflare 账号 | `1663988203@qq.com's Account` / account id `c5b214ba182d8c1a2880bff2613c2bb8`（OAuth 已登录，凭据存于本机 wrangler 配置） |
 | D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；远端已应用迁移 `0000_init_netease_sessions.sql` |
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY` 已在 CF 侧设置（本地副本在 `app/.dev.vars`，已 gitignore） |
@@ -141,7 +141,7 @@
 
 ---
 
-## 6. 验证矩阵（V1–V24，全部实际执行过）
+## 6. 验证矩阵（V1–V27，全部实际执行过）
 
 | # | 检查 | 命令/方法 | 结果 |
 |---|---|---|---|
@@ -167,7 +167,9 @@
 | V22 | 默认关闭鉴权 | 生产 curl | ✅ 未登录 `myPlaylists` → `UNAUTHORIZED` 401 |
 | V23 | Cron/部署形态 | 部署输出 | ✅ `schedule: 23 4 * * *` 已注册；代理回归 403 |
 | V24 | **CSP 是否打死前端** | 无头 Edge `--dump-dom` | ✅ `#root` 已挂载、`canvas` 存在（three.js 已初始化）、面板文案已渲染 → CSP 未阻断资源 |
-| V25 | Vite dev 下的 API 行为（交接前补测） | `npm run dev` + curl | ⚠️ `/api/health` 返回 `{"ok":false,"storage":false,"key":false}` —— **Vite dev 的 `/api/*` 没有绑定**（`@hono/vite-dev-server` 不传 `env`）。已写入 §8 陷阱 10，并给出建议修法（改 Vite proxy 到 8787） |
+| V25 | Vite dev 下的 API 行为（交接前补测） | `npm run dev` + curl | ⚠️ `/api/health` 返回 `{"ok":false,"storage":false,"key":false}` —— **Vite dev 的 `/api/*` 没有绑定**（`@hono/vite-dev-server` 不传 `env`）。已写入 §8 陷阱 10；该修法已于 2026-10-04 实施（见 V26） |
+| V26 | 本地双服务代理（陷阱 10 修复后） | `npm run dev:worker` + `npm run dev` 双后台 + curl | ✅ `localhost:3000/api/health` → `{"ok":true,"storage":true,"key":true}`；`/api/proxy/audio` 无签名 403、`/api/nope` JSON 404 均经 Vite 代理正确透传（修复前 health 全 false） |
+| V27 | **GitHub Actions CI 端到端** | 共 3 次运行：push 首跑 / 手动触发 / 推送文档再触发 | ✅ verify 32–39s 全绿；deploy 25–32s 实发成功（首版 `8ddf40c7`，gzip 218.87 KiB / startup 21 ms）；未配 token 时 deploy 正确跳过并打 notice |
 
 ---
 
