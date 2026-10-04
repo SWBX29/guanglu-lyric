@@ -10,14 +10,14 @@
 | 项目 | 状态 |
 |---|---|
 | **线上地址** | https://guanglu-lyric.1663988203.workers.dev |
-| **当前 Worker 版本** | `324cfeba-66a9-480a-9395-87a8dfbb9ba2`（gzip 218.87 KiB，startup 27 ms） |
+| **当前 Worker 版本** | `8ddf40c7-d850-4cdd-a12f-7e972237ceca`（2026-10-04 由 GitHub Actions CI 发布；gzip 218.87 KiB，startup 21 ms） |
 | Cloudflare 账号 | `1663988203@qq.com's Account` / account id `c5b214ba182d8c1a2880bff2613c2bb8`（OAuth 已登录，凭据存于本机 wrangler 配置） |
 | D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；远端已应用迁移 `0000_init_netease_sessions.sql` |
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY` 已在 CF 侧设置（本地副本在 `app/.dev.vars`，已 gitignore） |
 | Cron | `23 4 * * *`（每天清理过期会话） |
-| Git | 7 次提交，HEAD = `a43f32b`，工作树 clean |
-| 质量门 | `tsc -b` exit 0 ｜ `vitest` **44/44** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 |
-| 代码状态 | **可直接使用**；剩 3 条非阻断待办 + 1 项需人工用手机扫码验证 |
+| Git | 已推送到 **https://github.com/SWBX29/guanglu-lyric**（Public，master，含全部历史）；本地工作树 clean |
+| 质量门 | `tsc -b` exit 0 ｜ `vitest` **44/44** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 38–39s 全绿、deploy 32s 实发成功 |
+| 代码状态 | **可直接使用**；剩 2 条非阻断待办（自定义域名、审计日志）+ 1 项需人工用手机扫码验证 |
 
 **一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；唯一未人工验证的是"真人扫码登录 + 播放频谱"（需要手机与浏览器）。
 
@@ -134,6 +134,10 @@
 | `afe7662` | P3：完成生产部署 + 线上验证；修构建临时目录竞态与包装器引号缺陷 |
 | `386cee0` | P2(2/2)：登录 CSRF 绑定、CSP/安全头、默认关闭鉴权、Cron 清理 |
 | `a43f32b` | docs：补 V24（无头浏览器渲染验证） |
+| `a1ae6df` | docs：新增跨对话交接文档 HANDOFF.md（并据实测补 V25） |
+| `7c80af4` | fix：run.mjs 注入 `WRANGLER_LOG_PATH`——修掉沙箱内 wrangler 因日志写入被拒而退出码为 1 的假失败（§8 陷阱 12） |
+| `2971ff4` | fix：Vite dev 改 `/api` 代理到 8787——修复本地全栈开发绑定全丢（§8 陷阱 10） |
+| `a40d94d` | ci：GitHub Actions 工作流（检查/测试/构建 + 门控部署 Cloudflare Workers）；仓库推送至 GitHub |
 
 ---
 
@@ -198,6 +202,10 @@
 12. **沙箱内 wrangler 写日志被拒 → exit 1（后果其实已成功）**：wrangler 启动时会先写调试日志到 `%APPDATA%\xdg.config\.wrangler\logs\`（源码默认值 `getGlobalConfigPath()/logs`，**与 TEMP 无关**，所以 `scripts/run.mjs` 的临时目录重定向管不到它）。TRAE 沙箱拒绝写该路径 → 打印 `X [ERROR] Failed to write to log file … EPERM` 加 `TRAE Sandbox Error`；**命令的真实输出完整有效，但进程以 exit 1 结束** —— 这是纯日志文件问题，不是命令失败，却会让 `&&` 链/脚本误判。
    → **解法（已实测并已固化）**：`scripts/run.mjs` 已统一注入 `WRANGLER_LOG_PATH` 到项目内 `.tmp/wrangler-logs`（与 TEMP 重定向同处），凡经它启动的 wrangler 命令日志正常落地、exit 0（wrangler 用它作日志目录，默认才是全局配置目录）。手工等效：`$env:WRANGLER_LOG_PATH = "<app>\.tmp\wrangler-logs"`。
    → 备选：沙箱外执行该命令，或在 TRAE「设置 → 权限与审批 → 自定义配置」放行该目录。
+13. **推送到 GitHub（github.com）需两件套：代理 + 集成 token**：① `github.com` 的 TLS 在本网络被干扰（TCP 能连、握手被打断；对照 `api.github.com` 完全正常）→ 推送必须走本机代理 `http://127.0.0.1:7900`（实测 7890/7897 不通、7900 通）；② keyring 里的 OAuth token 缺 `workflow` 作用域，推 `.github/workflows/*` 会被拒（`refusing to allow an OAuth App to create or update workflow`），而 TRAE 注入的 `GH_TOKEN`（集成 App token，`ghu_` 前缀）对新仓库有 admin/push 且**可以写 workflow 文件**（实测全量推送成功）。
+   → **可用推送命令（本机实测成功）**：`git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900" -c credential.helper= -c "credential.helper=!gh auth git-credential" push -u origin master`（保持 `GH_TOKEN` 在环境中 → 用集成 token；若清空 `GH_TOKEN` 会退回 keyring token，推含 workflow 的提交会被拒）。
+   → 备选：给 keyring OAuth 账号补作用域 `gh auth refresh -h github.com -s workflow`（需浏览器设备码确认）。
+   → 另注意：`gh repo create` 用集成 token 会报 `Resource not accessible by integration` —— 把 `$env:GH_TOKEN` 清空后用 keyring token 创建即可。
 
 ---
 
@@ -239,6 +247,12 @@ node scripts/run.mjs wrangler d1 execute DB --remote --command "SELECT COUNT(*) 
 node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错误（G5）
 ```
 
+### 推送代码到 GitHub（本机必须带代理与集成 token，详见 §8 陷阱 13）
+
+```powershell
+git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900" -c credential.helper= -c "credential.helper=!gh auth git-credential" push
+```
+
 ### 回滚
 
 - **代码**：`git revert <commit>` 或 checkout 到任意提交；CF 侧可在 dashboard 回退到上一版本（历史版本可见）。
@@ -273,12 +287,16 @@ node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错
 3. 读 `app/api/neteaseSession.ts` + `app/api/lib/proxyToken.ts` + `app/api/lib/loginBind.ts`（三条安全主线）。
 4. 跑一遍 `npm run check && npm run test`，确认 44/44 与 tsc 绿（这是"当前基线"）。
 5. 若要做功能迭代：**先跑 `npm run dev:worker` + `npm run dev`（双终端，见 §8 陷阱 10）**，改完再 `npm run deploy`。
-6. 若遇到构建/运行报错：**优先查 §8 的 12 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
+6. 若遇到构建/运行报错：**优先查 §8 的 13 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
 
 ---
 
-## 12. 未完成的三个可选收尾（按价值排序）
+## 12. 收尾进展（按价值排序）
 
-1. **GitHub 免费 CI**：写 `.github/workflows/*.yml`（`npm ci --ignore-scripts` → `npm run check` → `npm run test` → `npm run build` → `wrangler deploy`），需要用户建仓库 + 配置 `CLOUDFLARE_API_TOKEN` 与 account id；公开仓库 Actions 分钟不限量。
-2. **自定义域名**：解决墙内可达性；需用户提供域名（Cloudflare 免费支持，配置为 `wrangler.jsonc` 的 `routes` 或 dashboard 绑定）。
+1. **GitHub CI —— ✅ 已完成（2026-10-04）**：仓库 `https://github.com/SWBX29/guanglu-lyric`（Public）；工作流 `.github/workflows/ci.yml`：
+   - `verify`（push / PR / 手动）：`npm ci --ignore-scripts` → `tsc -b` → 44 测试 → `vite build` → `wrangler deploy --dry-run`；实测 **38–39s 全绿**。
+   - `deploy`（仅 master push / 手动触发；门控在 `CLOUDFLARE_API_TOKEN` 是否存在，缺失时打 notice 跳过）：`npm run deploy`；实测 **32s 发布成功**（版本 `8ddf40c7`）。
+   - Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 均已配置。**校验 token 要用账户级端点** `GET /client/v4/accounts/<id>/tokens/verify`（`/user/tokens/verify` 对账户 token 会误报 Invalid，别被误导）。
+   - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
+2. **自定义域名**：解决墙内可达性（本网络实测 workers.dev 边缘 IP 被黑洞）；需用户提供域名（Cloudflare 免费支持，配置为 `wrangler.jsonc` 的 `routes` 或 dashboard 绑定）。
 3. **审计日志**：会话建/毁、扫码成功、代理滥用四类事件结构化记录（D1 写入行数需留意免费额度，只记事件与哈希，不记 cookie）。
