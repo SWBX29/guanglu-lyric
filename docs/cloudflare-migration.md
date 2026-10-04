@@ -112,6 +112,7 @@ D1：`guanglu-lyric-db`（`a8f4b230-1181-4d24-9aaf-bc15a55f70d1`），远端迁�
 | V21 | 安全响应头 / CSP（L2） | ✅ 生产实测：`/api/health` 带 HSTS + nosniff + Referrer-Policy + X-Frame-Options + CORP；`/` 额外带完整 CSP（含 Google Fonts 与内联样式放行）与 Permissions-Policy |
 | V22 | 默认失败关闭的鉴权（M2） | ✅ 生产实测：未登录访问 `netease.myPlaylists` → `UNAUTHORIZED`（401），不再依赖逐个 handler 手工校验 |
 | V23 | Cron 与部署形态 | ✅ 部署输出 `schedule: 23 4 * * *`；Worker 版本 `324cfeba-66a9-480a-9395-87a8dfbb9ba2`；代理无签名仍 403（回归通过） |
+| V24 | **CSP 是否打死前端**（无头浏览器渲染） | ✅ 无头 Edge `--dump-dom`：`#root` 已挂载、`canvas` 存在（three.js 已初始化）、网易云面板文案已渲染、模块脚本与样式均正常引用 → **CSP 未阻断任何资源**。这是唯一可能"页面看着正常但白屏"的改动，已排除 |
 
 若后续流量增大出现 1102，按收益排序的瘦身手段：① `songUrl`/`lyric` 结果加平台缓存（同 id 命中缓存即零 CPU）；② 二维码改为前端渲染（服务端只回 `key`，但需与 H2 的登录绑定一起评估）；③ 把 weapi 的 JSON 解析/校验链从 zod 换成手写守卫。
 
