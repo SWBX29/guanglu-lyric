@@ -42,7 +42,8 @@ export interface NeteaseMe {
 }
 
 export type NeteaseSongUrlResult =
-  | { playable: true; url: string; br: number; type: string; proxyUrl: string }
+  | { playable: true; spectrum: true; url: string; br: number; type: string; proxyUrl: string }
+  | { playable: true; spectrum: false; url: string; br: number; type: string }
   | { playable: false; reason: string };
 
 export interface NeteaseLyric {

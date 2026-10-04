@@ -1,74 +1,44 @@
 /**
- * 播放媒体 URL 解析 —— 网易云区域限制的绕行层。
+ * 播放直连模式的支持模块。
  *
- * 背景（2026-10-04 实测，见 docs/HANDOFF.md §9/V29）：
- * weapi 取链端点对 **Cloudflare 出口稳定返回 `code: 404`**（同一 id 从中国出口
- * 可正常取链，属版权区域限制/风控）；而公开外链端点
- * `music.163.com/song/media/outer/url` 在海外出口同样可用（实测 206 + audio/mpeg，
- * 无需 weapi、无需登录，重定向到 CDN mp3）。
+ * 背景（2026-10-04 实测，见 docs/HANDOFF.md §6 V29）：
+ * 网易云对云厂商出口（Cloudflare）的取链端点统一下发风控挑战（`code: -462`），
+ * 服务端无法出流；但**客户端直连**网易云公开外链端点（手机 / 中国出口）可正常
+ * 播放（已实测可用）。因此取链 API 失败时降级为「直连模式」：
+ * 客户端 `<audio>` 直接播放外链端点 —— 音乐 / 歌词 / 进度可用，
+ * 唯独拿不到频谱（外链无 CORS，WebAudio 分析器读不到字节）。
  *
- * 因此策略为：**API 直链优先，失败回退外链端点**。
- * 失败过的 id 在 isolate 内缓存一段时间，避免音频代理的每个 Range 请求都白打
- * 一遍 weapi（双层 AES + BigInt 模幂，是评审核验过的 CPU 敏感项）。
+ * 命中过的 id 在 isolate 内缓存，避免每次点歌都白打一遍 weapi
+ * （双层 AES + BigInt 模幂，是评审核验过的 CPU 敏感项）。
  */
-const API_FAIL_TTL_MS = 10 * 60 * 1000;
+const DIRECT_MODE_TTL_MS = 10 * 60 * 1000;
 
-/** id -> 在该时刻前优先用外链（不再尝试 weapi）。isolate 级、尽力而为。 */
-const preferOuterUntil = new Map<string, number>();
+/** id -> 在该时刻前直接走直连模式（不再尝试服务端取链）。isolate 级、尽力而为。 */
+const directModeUntil = new Map<string, number>();
 
-export function markApiFailed(id: string, now: number = Date.now()): void {
-  preferOuterUntil.set(id, now + API_FAIL_TTL_MS);
+export function markDirectMode(id: string, now: number = Date.now()): void {
+  directModeUntil.set(id, now + DIRECT_MODE_TTL_MS);
 }
 
-export function shouldPreferOuter(id: string, now: number = Date.now()): boolean {
-  const until = preferOuterUntil.get(id);
+export function isDirectMode(id: string, now: number = Date.now()): boolean {
+  const until = directModeUntil.get(id);
   if (until === undefined) return false;
   if (until <= now) {
-    preferOuterUntil.delete(id);
+    directModeUntil.delete(id);
     return false;
   }
   return true;
 }
 
-/** 公开外链端点（浏览器直链风格，服务端跟随重定向到 CDN mp3） */
+/** 公开外链端点：客户端直连播放（浏览器跟随 302 到 CDN mp3） */
 export function outerSongUrl(id: string): string {
   return `https://music.163.com/song/media/outer/url?id=${id}.mp3`;
 }
 
 /**
- * 外链端点对**空 User-Agent** 的客户端会退回 302 错误链（实测：空 UA 失败、
- * 任意非空 UA 正常）——而 Worker 的 fetch 默认不带 UA，必须显式声明。
- * 使用自我标识而非伪装浏览器（该端点只要求非空）。
+ * 网易云请求的显式 User-Agent：服务端 fetch 默认不带 UA，
+ * 而网易云对空 UA 的客户端会退回 302 错误链（实测；音频代理出站复用此头）。
  */
 export const OUTER_FETCH_HEADERS: Record<string, string> = {
   "User-Agent": "GuangluLyric/1.0 (+https://lyric.swbx.cc.cd)",
 };
-
-/**
- * 轻量探测：外链端点是否真的能出音频。
- * 只取 1 字节 Range 并立即取消响应体；任何异常一律按不可播处理（探测是旁路）。
- * 失败时返回诊断详情（status/content-type 或异常消息），供调用方与日志定位。
- */
-export type OuterProbeResult = { playable: true } | { playable: false; detail: string };
-
-export async function probeOuterPlayable(id: string): Promise<OuterProbeResult> {
-  try {
-    const res = await fetch(outerSongUrl(id), {
-      headers: { Range: "bytes=0-0", ...OUTER_FETCH_HEADERS },
-      redirect: "follow",
-    });
-    const type = res.headers.get("content-type") ?? "";
-    const ok = (res.ok || res.status === 206) && /audio|octet-stream/.test(type);
-    const detail = `status=${res.status} type=${type || "-"}`;
-    await res.body?.cancel();
-    if (!ok) {
-      console.warn(`[songMedia] outer probe not audio: id=${id} ${detail}`);
-      return { playable: false, detail };
-    }
-    return { playable: true };
-  } catch (err) {
-    const detail = `error=${err instanceof Error ? err.message : String(err)}`;
-    console.warn(`[songMedia] outer probe failed: id=${id} ${detail}`);
-    return { playable: false, detail };
-  }
-}

@@ -40,17 +40,25 @@ export class AudioEngine {
     });
   }
 
-  /** Load a remote/streaming URL (use a same-origin proxy so the analyser keeps working) */
-  async loadUrl(url: string) {
+  /**
+   * Load a remote/streaming URL.
+   * spectrum=true（默认）：同源代理 + WebAudio 分析器，可拿频谱；
+   * spectrum=false：**直连模式**——不接入分析器（跨源媒体会让节点输出静音），
+   * 播放 / 歌词 / 进度正常，但 getBands() 恒为 0。
+   */
+  async loadUrl(url: string, opts: { spectrum?: boolean } = {}) {
+    const spectrum = opts.spectrum !== false;
     this.stop();
-    this.ensureCtx();
+    if (spectrum) this.ensureCtx();
     this.isDemo = false;
     const el = new Audio();
-    el.crossOrigin = 'anonymous';
+    if (spectrum) el.crossOrigin = 'anonymous';
     el.src = url;
     this.el = el;
-    this.source = this.ctx!.createMediaElementSource(el);
-    this.source.connect(this.analyser!);
+    if (spectrum) {
+      this.source = this.ctx!.createMediaElementSource(el);
+      this.source.connect(this.analyser!);
+    }
     await new Promise<void>((res, rej) => {
       el.addEventListener('canplay', () => res(), { once: true });
       el.addEventListener('error', () => rej(new Error('音频加载失败')), { once: true });

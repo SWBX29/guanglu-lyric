@@ -5,7 +5,7 @@ import { appRouter } from "./router";
 import { createContextFactory } from "./context";
 import { requireBindings, type Bindings } from "./lib/env";
 import { purgeOldAuditEvents, recordAudit, recordProxyRejection } from "./lib/audit";
-import { markApiFailed, outerSongUrl, OUTER_FETCH_HEADERS, shouldPreferOuter } from "./lib/songMedia";
+import { OUTER_FETCH_HEADERS } from "./lib/songMedia";
 import { verifyAudioToken } from "./lib/proxyToken";
 import { ncm } from "./neteaseClient";
 import { getSession, purgeExpiredSessions } from "./neteaseSession";
@@ -75,20 +75,13 @@ app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
     return c.json({ error: "forbidden", reason: token.reason }, 403);
   }
   const session = await getSession(createDb(env.DB), env.COOKIE_ENC_KEY, c.req.raw);
-  // 解析媒体地址：API 直链优先；对 CF 出口被区域限制时回退外链端点（lib/songMedia.ts）
-  let mediaUrl: string | null = null;
-  if (!shouldPreferOuter(id)) {
-    const urlRes = await ncm.songUrlV1(id, session?.neteaseCookie);
-    const data = urlRes.body?.data?.[0];
-    if (data?.url) {
-      mediaUrl = data.url;
-    } else if (data?.fee === 1 || data?.fee === 4 || data?.message) {
-      return c.json({ error: "unplayable", reason: data?.message ?? "VIP/付费歌曲，暂无播放权限" }, 404);
-    } else {
-      markApiFailed(id); // 后续 Range 请求直接走外链，省掉一遍 weapi
-    }
+  const urlRes = await ncm.songUrlV1(id, session?.neteaseCookie);
+  const data = urlRes.body?.data?.[0];
+  if (!data?.url) {
+    // 云出口被风控（code -462）时这里没有 url；前端此时已走直连模式，不会请求本代理
+    return c.json({ error: "unplayable", reason: data?.message ?? "no url" }, 404);
   }
-  if (!mediaUrl) mediaUrl = outerSongUrl(id);
+  const mediaUrl = data.url;
   const isHead = c.req.method === "HEAD";
   const upstreamHeaders: Record<string, string> = {};
   const range = c.req.header("range");

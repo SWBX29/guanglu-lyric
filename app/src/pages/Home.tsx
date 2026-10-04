@@ -250,8 +250,9 @@ export default function Home() {
     if (!engine) return;
     if (d.playable) {
       setTrackLoading(true);
+      // spectrum=true 走同源代理；false 为直连模式（网易云限制云出口时的降级，无频谱）
       engine
-        .loadUrl(d.proxyUrl)
+        .loadUrl(d.spectrum ? d.proxyUrl : d.url, { spectrum: d.spectrum })
         .then(() => {
           engine.play();
           setPlaying(true);
@@ -362,6 +363,8 @@ export default function Home() {
   };
 
   const busy = trackLoading || (songId != null && songUrlQ.isFetching);
+  // 直连模式（API 被网易云风控拒绝时的降级）：能播、能看歌词，但拿不到频谱
+  const directPlay = songUrlQ.data?.playable === true && songUrlQ.data.spectrum === false;
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-black select-none">
@@ -504,6 +507,9 @@ export default function Home() {
                   </div>
                 )}
                 {playError && <div className="mt-0.5 text-[11px] text-red-300/90">{playError}</div>}
+                {directPlay && !busy && !playError && (
+                  <div className="mt-0.5 text-[11px] text-white/40">直连播放（当前网络下无频谱）</div>
+                )}
                 {pureMusic && !busy && !playError && (
                   <div className="mt-0.5 text-[11px] text-white/40">纯音乐，请欣赏</div>
                 )}

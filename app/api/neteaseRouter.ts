@@ -3,7 +3,7 @@ import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
 import { createRouter, protectedQuery, publicQuery } from "./middleware";
 import { hashSubject, recordAudit } from "./lib/audit";
-import { markApiFailed, outerSongUrl, probeOuterPlayable, shouldPreferOuter } from "./lib/songMedia";
+import { isDirectMode, markDirectMode, outerSongUrl } from "./lib/songMedia";
 import { buildProxyUrl, signAudioToken } from "./lib/proxyToken";
 import {
   clearQrBindCookie,
@@ -208,15 +208,16 @@ export const neteaseRouter = createRouter({
     }),
 
   /**
-   * 播放地址。**API 直链优先 + 外链兜底**：实测网易云取链 API 对 Cloudflare 出口
-   * 稳定返回 code 404（版权区域限制；同 id 中国出口正常），而公开外链端点在海外
-   * 出口可用（见 lib/songMedia.ts）。cookie 照常传入（有直链时权限/质量信息最全）。
+   * 播放地址。两种模式（实测背景见 docs/HANDOFF.md §6 V29）：
+   * - `spectrum: true`：API 取链成功（本地 / 中国出口）→ 返回同源代理地址，可拿频谱；
+   * - `spectrum: false`：API 被网易云对云出口的风控拒绝 → **直连模式**，客户端直接
+   *   播放公开外链端点（音乐 / 歌词正常，唯独无频谱——外链无 CORS）。
    */
   songUrl: publicQuery
     .input(z.object({ id: z.number().int().positive() }))
     .query(async ({ ctx, input }): Promise<NeteaseSongUrlResult> => {
       const id = String(input.id);
-      if (!shouldPreferOuter(id)) {
+      if (!isDirectMode(id)) {
         const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
         const res = await ncm.songUrlV1(input.id, session?.neteaseCookie);
         const data = res.body?.data?.[0];
@@ -225,6 +226,7 @@ export const neteaseRouter = createRouter({
           const { exp, sig } = await signAudioToken(id, ctx.proxyKey);
           return {
             playable: true,
+            spectrum: true,
             url: data.url,
             br: data.br ?? 0,
             type: data.type ?? "",
@@ -235,24 +237,9 @@ export const neteaseRouter = createRouter({
         if (data?.fee === 1 || data?.fee === 4) {
           return { playable: false, reason: "VIP/付费歌曲，暂无播放权限" };
         }
-        // API 失败：探测外链端点是否可用（网易云对云端出口可能放行、也可能返回风控验证页）
-        const probe = await probeOuterPlayable(id);
-        if (!probe.playable) {
-          return {
-            playable: false,
-            reason: "该歌曲暂无法播放：网易云限制了云端出口取链（本地运行不受影响，可稍后重试）",
-          };
-        }
-        markApiFailed(id);
+        markDirectMode(id); // API 失败：记住该 id，后续直接走直连模式（省掉白打的 weapi）
       }
-      const { exp, sig } = await signAudioToken(id, ctx.proxyKey);
-      return {
-        playable: true,
-        url: outerSongUrl(id),
-        br: 0,
-        type: "mp3",
-        proxyUrl: buildProxyUrl(id, exp, sig),
-      };
+      return { playable: true, spectrum: false, url: outerSongUrl(id), br: 0, type: "mp3" };
     }),
 
   /** 歌词（匿名可用）。纯音乐 lrc 为 null 且 pureMusic=true */
