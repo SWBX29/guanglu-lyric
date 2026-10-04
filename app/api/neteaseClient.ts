@@ -10,8 +10,9 @@
 import crypto from "node:crypto";
 
 // ---------- weapi 加密 ----------
-const PRESET_KEY = "0CoJUm6Qyw8W8jud";
-const IV = "0102030405060708";
+// 下列常量为 weapi 协议公开常量（非密钥），导出仅供单测做黄金向量与解密回环校验。
+export const PRESET_KEY = "0CoJUm6Qyw8W8jud";
+export const IV = "0102030405060708";
 const PUB_KEY_E = BigInt("0x10001");
 const PUB_KEY_N = BigInt(
   "0x00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b72515" +
@@ -20,26 +21,32 @@ const PUB_KEY_N = BigInt(
     "e4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7",
 );
 
-function aesEncrypt(text: string, key: string): string {
+export function aesEncrypt(text: string, key: string): string {
   const cipher = crypto.createCipheriv("aes-128-cbc", Buffer.from(key, "utf8"), Buffer.from(IV, "utf8"));
   return Buffer.concat([cipher.update(text, "utf8"), cipher.final()]).toString("base64");
 }
 
-function rsaEncrypt(text: string): string {
+export function rsaEncrypt(text: string): string {
   // 无填充 RSA：将明文反转后按大整数做 modPow
   const m = BigInt("0x" + Buffer.from(text, "utf8").reverse().toString("hex"));
   const c = m ** PUB_KEY_E % PUB_KEY_N;
   return c.toString(16).padStart(256, "0");
 }
 
-function randomSecretKey(): string {
+export function randomSecretKey(): string {
   return crypto.randomBytes(8).toString("hex"); // 16 个十六进制字符
 }
 
+/**
+ * weapi 加密：AES-128-CBC 双层（先用协议公开密钥，再用随机 secretKey）+ 无填充 RSA。
+ * secretKey 可注入，仅供单测固定随机源以取得确定性黄金向量；生产调用保持单参形式。
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function weapiEncrypt(payload: Record<string, any>): { params: string; encSecKey: string } {
+export function weapiEncrypt(
+  payload: Record<string, any>,
+  secretKey: string = randomSecretKey(),
+): { params: string; encSecKey: string } {
   const text = JSON.stringify(payload);
-  const secretKey = randomSecretKey();
   return {
     params: aesEncrypt(aesEncrypt(text, PRESET_KEY), secretKey),
     encSecKey: rsaEncrypt(secretKey),

@@ -11,6 +11,12 @@ Thumbs.db
 *.swp
 desktop.ini
 
+# ---- local scratch dir (build temp, one-off scripts) ----
+.tmp/
+
+# ---- local package cache (npm --cache, kept in-tree to satisfy sandbox writes) ----
+.npm-cache/
+
 # ---- generic safety nets (app/.gitignore covers the app subtree) ----
 node_modules/
 dist/

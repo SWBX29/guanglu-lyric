@@ -1,0 +1,13 @@
+# Normalize to LF in the repository and in the working copy.
+# The app is built/deployed on Linux (Cloudflare Workers / CI), so CRLF noise
+# must not leak into scripts, SQL migrations or lockfiles.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff2 binary
