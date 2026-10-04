@@ -151,10 +151,11 @@
 | `2106ebd` | chore：收敛取链失败话术（定位网易云风控 code=-462）；移除临时诊断 |
 | `7ae5d93` | fix：UI/播放状态机缺陷修复 —— 加载态卡死与自动播放拦截感知、同曲重试、笔尖越界飘空、天气菜单压面板、二维码超时僵尸态、快速切歌守卫；eslint 忽略 `.wrangler`/`.tmp` 构建产物 |
 | `1b3c2d4` | fix：生产直连播放被 CSP/混合内容拦截 —— `media-src` 放行 `music.163.com` 与 `*.music.126.net`，`upgrade-insecure-requests` 升级 outer→CDN 的 http 302；顺带放行 CF 探针消除控制台噪音 |
+| `a821b9d` | fix：歌词栏当前行"糊团"修复 —— 逐字揭示去掉 blur、当前行光晕收敛；卡拉OK扫光从 `background-clip:text` 改 `mask-image`（实色文字，移动端不再出现鬼影/光斑，§8 陷阱 16） |
 
 ---
 
-## 6. 验证矩阵（V1–V32，全部实际执行过）
+## 6. 验证矩阵（V1–V33，全部实际执行过）
 
 | # | 检查 | 命令/方法 | 结果 |
 |---|---|---|---|
@@ -188,6 +189,7 @@
 | V30 | **UI/播放状态机缺陷修复的实测闭环** | 本地双服务（8787+3000）+ 浏览器 DOM 几何/快照取证（只读） | ✅ 笔尖轨道=文字实际宽（实测 144/160/128px；修复前一律冲到 ~258px）；当前行渐变/光晕正常；右上角主题+天气簇底边 222 < 面板顶 227（修复前 8 个 chips 整体压住面板首行）；搜索→点歌→进度前进（11%→38%）→暂停冻结→恢复前进全部正常；控制台 0 报错；二维码 60s 超时出现「二维码已超时 + 刷新二维码」入口（线上同样复现） |
 | V31 | **生产直连播放失败根因定位（两个浏览器侧拦截点）** | 线上 curl 对照 + 浏览器实测复现 + https CDN 对照 | ✅ ① 页面 CSP `media-src 'self'` 直接拒绝跨源音频（music.163.com）；② outer 端点 302 落到 **http** CDN（`m7xx/m8xx.music.126.net`），HTTPS 页面下属混合内容。两条同时拦。修复：CSP 放行 `https://music.163.com https://*.music.126.net` + `upgrade-insecure-requests`；**实测同路径 https CDN 返回 200 audio/mpeg（3.7MB）**（浏览器会把 audio 混合内容自动升级，302 跳转在 UIR 下同被升级） |
 | V32 | **CSP 修复部署核对** | 线上 curl -D（经本机代理） | ✅ 生产首页已返回新 CSP：`media-src 'self' https://music.163.com https://*.music.126.net; …; upgrade-insecure-requests`；CI verify+deploy 双绿（version `见 wrangler deployments list`）。真实设备出声属人工验证项（见 §9），浏览器自动化额度受限后以代码/网络层证据闭环 |
+| V33 | **歌词栏当前行"糊团"修复** | 用户手机截图 4x 放大取证 + 代码层重构（免浏览器） | ✅ 截图确认为"无字形的一排模糊金斑 + 大面积光晕"（背景clip 鬼影 + 2.5px 模糊 + 呼吸光晕叠加所致）；已改为纯透明度逐字揭示 + `mask-image` 扫光 + 克制光晕（§8 陷阱 16）；本地 `tsc`/`vitest`/`vite build` 全绿；真机复验待用户确认 |
 
 ---
 
@@ -230,6 +232,7 @@
    → 解法：`db:apply:local`、`d1 execute --local`（含 `--file`）以及需要 D1 写入的本地验证，一律在沙箱外执行。
    → 本地手动触发 Cron：`curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled?cron=23+4+*+*+*"`（返回 `ok`）；注意 `--test-scheduled` 的 `/__scheduled` 会被 Static Assets 的 SPA 回落遮蔽（实测）。新版 wrangler 提示的本地入口为 `/cdn-cgi/local/scheduled`（v4.147 实测提示）。
 15. **生产直连播放的两个浏览器侧拦截点（2026-10-04 定位，已修复）**：直连模式让 `<audio>` 直接播 `https://music.163.com/song/media/outer/url?id=X.mp3`，在 HTTPS 站点会被两层拦截 —— ① `_headers` 的 CSP `media-src 'self'` 直接拒绝跨源音频；② outer 端点 302 落到 **http** CDN（`m7xx/m8xx.music.126.net`），属混合内容（`<audio>` 属"可升级内容"，但需要策略允许升级）。**解法（已固化）**：CSP 增加 `media-src 'self' https://music.163.com https://*.music.126.net` 与 `upgrade-insecure-requests`（302 的 http 目标会被升级为 https；实测同路径 https CDN 返回 200 audio/mpeg）。注意 `_headers` 只对静态资源生效，改动需重新部署；`media-src` 用子域通配符（`https://*.music.126.net`）覆盖 m7xx/m8xx 系列 CDN。另：CF 自动注入的 Web Analytics 探针也被原 CSP 拦截（控制台资源错误），已一并放行 `static.cloudflareinsights.com` / `cloudflareinsights.com`。
+16. **歌词栏当前行在移动端变"糊团/光斑"（2026-10-04 修复）**：原"逐字书写"用 `filter: blur(2.5px)` 揭示，卡拉OK扫光用 `background-clip: text`（文字透明、渐变画在父元素上）。子元素带 `opacity`/`filter` 动画时，移动端渲染会把整行呈现为一排模糊金斑（字形不可辨 + 44–72px 呼吸光晕连成光带）。**解法（已固化）**：① 逐字揭示只做透明度（彻底去掉 blur）；② 扫光改 `mask-image`（实色暖白文字 + 线性 mask 表达已唱/未唱亮度），绕开 `background-clip:text` 与子元素动画的兼容性问题；③ 列表当前行光晕收敛为 7/18px（3D 飞行字幕的强光晕保留）。遇到"文字特效在桌面正常、手机异常"时优先怀疑 ①②这类 `background-clip/filter` 与合成层的交互。
 
 ---
 
