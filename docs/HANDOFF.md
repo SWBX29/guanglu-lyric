@@ -191,9 +191,9 @@
 7. **`wrangler d1 create` 会偷偷往 wrangler.jsonc 追加第二个 D1 绑定**（会与代码用的 `DB` 冲突）→ 必须删掉重复条目。
 8. **`_headers` 语法**：只支持 `#` 注释，`/* */` 会被当成路径模式导致部署失败（`Invalid _headers configuration`）。
 9. **`wrangler types` 生成物必须与 wrangler.jsonc 同步**；改了绑定/配置要重跑 `npm run cf-typegen`，否则类型与配置漂移。
-10. **`npm run dev`（Vite，端口 5173/配置为 3000）下 `/api/*` 只能路由、不带任何绑定** —— 已实测：`/api/health` 返回 `{"ok":false,"storage":false,"key":false}`。原因：`vite.config.ts` 里的 `@hono/vite-dev-server` 用 `app.fetch(request)` 调用 Hono，**没有传入 Worker 的 `env`**，因此 `DB`/`COOKIE_ENC_KEY` 全是 undefined，依赖数据库或密钥的接口（`me`/歌单/代理）会失败。
-   → **结论：全栈本地开发的正确入口是 `npm run dev:worker`**（wrangler dev，提供绑定 + 本地 D1，端口 8787）。
-   → 建议修法（**尚未实施**）：`vite.config.ts` 去掉 `devServer()` 改为 `server.proxy = { "/api": "http://127.0.0.1:8787" }`，然后两个终端分别跑 `npm run dev:worker` 与 `npm run dev`，即可同时拿到绑定与前端 HMR。
+10. **Vite dev（3000）曾丢绑定** —— **已修复**：原 `@hono/vite-dev-server` 调 `app.fetch()` 不传 Worker `env`，`/api/health` 曾返回 `{"ok":false,"storage":false,"key":false}`。现 `vite.config.ts` 已去掉该插件，改为 `server.proxy`：`/api/* → http://127.0.0.1:8787`。
+   → **本地全栈开发 = 两个终端**：先 `npm run dev:worker`（8787：绑定 + 本地 D1 + secrets），再 `npm run dev`（3000：前端 HMR）。已实测 `localhost:3000/api/health` 返回 `{"ok":true,"storage":true,"key":true}`，且 `/api/proxy/audio` 403、`/api/nope` JSON 404 均经代理正确透传。
+   → 只跑 `npm run dev` 而 8787 未启动时，`/api/*` 会因代理目标不可达而报错（预期行为，不是 bug）。
 11. **`localhost` vs `127.0.0.1`**：Vite/部分工具默认只绑 `localhost`（IPv6 `::1`），用 `127.0.0.1` 访问会得到 `HTTP 000`。冒烟时优先用 `localhost`。
 12. **沙箱内 wrangler 写日志被拒 → exit 1（后果其实已成功）**：wrangler 启动时会先写调试日志到 `%APPDATA%\xdg.config\.wrangler\logs\`（源码默认值 `getGlobalConfigPath()/logs`，**与 TEMP 无关**，所以 `scripts/run.mjs` 的临时目录重定向管不到它）。TRAE 沙箱拒绝写该路径 → 打印 `X [ERROR] Failed to write to log file … EPERM` 加 `TRAE Sandbox Error`；**命令的真实输出完整有效，但进程以 exit 1 结束** —— 这是纯日志文件问题，不是命令失败，却会让 `&&` 链/脚本误判。
    → **解法（已实测并已固化）**：`scripts/run.mjs` 已统一注入 `WRANGLER_LOG_PATH` 到项目内 `.tmp/wrangler-logs`（与 TEMP 重定向同处），凡经它启动的 wrangler 命令日志正常落地、exit 0（wrangler 用它作日志目录，默认才是全局配置目录）。手工等效：`$env:WRANGLER_LOG_PATH = "<app>\.tmp\wrangler-logs"`。
@@ -224,7 +224,7 @@ cd E:\AIwork\Kimi_Agent\app
 npm run check        # tsc -b（前端 + Worker 双目标）
 npm run test         # vitest，应为 44/44
 npm run build        # vite build → dist/public
-npm run dev          # 仅前端（Vite）。注意 /api/* 无绑定，会失败 → 见 §8 陷阱 10
+npm run dev          # 前端 HMR（/api/* 由 Vite 代理转发到 8787，需先起 dev:worker → 见 §8 陷阱 10）
 npm run dev:worker   # ★ 全栈本地开发用这个：Worker + 本地 D1 + secrets，端口 8787
 npm run deploy       # 构建 + 发布（幂等，可反复执行）
 npm run cf-typegen   # 改过 wrangler.jsonc 后必须跑
@@ -262,7 +262,7 @@ node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错
 | 命令 | 端口 | 能做什么 | 不能做什么 |
 |---|---|---|---|
 | `npm run dev:worker` | 8787 | ★ 全栈：绑定 + 本地 D1 + secrets + 真实 Worker 运行时 | 前端无 HMR（静态产物来自 `dist/public`，改前端要看 `dist`） |
-| `npm run dev` | 5173（配置为 3000） | 前端 HMR | `/api/*` 无绑定 → 依赖 DB/密钥的接口失败（§8 陷阱 10） |
+| `npm run dev` | 3000 | 前端 HMR；`/api/*` 经代理转发到 8787（**需先起 `dev:worker`**） | 单独跑时 `/api/*` 因代理目标不可达而报错 |
 
 ---
 
@@ -272,7 +272,7 @@ node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错
 2. 读 `app/api/boot.ts` + `app/api/lib/env.ts` + `app/wrangler.jsonc`（运行时入口与绑定契约）。
 3. 读 `app/api/neteaseSession.ts` + `app/api/lib/proxyToken.ts` + `app/api/lib/loginBind.ts`（三条安全主线）。
 4. 跑一遍 `npm run check && npm run test`，确认 44/44 与 tsc 绿（这是"当前基线"）。
-5. 若要做功能迭代：**先跑 `npm run dev`（或 `dev:worker`）**，改完再 `npm run deploy`。
+5. 若要做功能迭代：**先跑 `npm run dev:worker` + `npm run dev`（双终端，见 §8 陷阱 10）**，改完再 `npm run deploy`。
 6. 若遇到构建/运行报错：**优先查 §8 的 12 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
 
 ---
