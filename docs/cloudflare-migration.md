@@ -54,19 +54,42 @@
 3. **esbuild 服务进程需要命名管道**：vite/vitest 的 JS API 以管道启动 esbuild 服务 → 受限模式下 `spawn EPERM`；esbuild **CLI**（继承 stdio）不受影响 —— 这是本项目内一条可复用的规律。
 4. **临时目录必须落在工作区内**：esbuild 在 `%TEMP%` 写临时文件后删除会被 ACL 拒绝 → 构建前设 `TEMP/TMP=<workspace>/.tmp`。
 
-### P1 · 迁移主体（依赖顺序，同一写者串行）
-1. [db/schema.ts](../app/db/schema.ts) 迁 `sqlite-core`：`id`→`text` 主键、`neteaseCookie`→密文字段、**两列 timestamp 统一 `{mode:"timestamp_ms"}`**、`created_at` 显式毫秒默认值
-2. `drizzle.config.ts` → `dialect: "sqlite"` + `wrangler d1 migrations` 流程（**首次迁移重新生成，不得沿用 MySQL DDL**）
-3. [connection.ts](../app/api/queries/connection.ts) → `drizzle-orm/d1`；[context.ts](../app/api/context.ts) → 闭包工厂注入 `env`（**binding 只来自每请求 `env`**）；[boot.ts](../app/api/boot.ts) 传 `c.env`
-4. [neteaseSession.ts](../app/api/neteaseSession.ts)：`getDb()`→`ctx.db`（5 处）、**无条件 `Secure`**、去 `NODE_ENV` 依赖、Cookie 解析 try/catch、D-3 的 AES-GCM + token 哈希
-5. 删除 [lib/vite.ts](../app/api/lib/vite.ts) 与 [boot.ts](../app/api/boot.ts) 的 node-server 分支（**不 shim `node:fs`**）；[lib/env.ts](../app/api/lib/env.ts) 去 `dotenv`、删死配置
-6. 新增单源部署配置（`wrangler.toml`/`wrangler.jsonc` + assets + `run_worker_first: ["/api/*"]` + `nodejs_compat` + D1 binding）；[package.json](../app/package.json) 脚本改造
-7. 新增 `tsconfig.worker.json`（`types` 换 Workers 类型，避免 `types:["node"]` 掩盖 Node API 泄漏）
-8. 音频代理：HMAC 短时效签名令牌 + 同源校验（`Sec-Fetch-Site`/Referer）+ Range 字节上限 + 不盲目透传 `content-length` + HEAD 短路
-9. zod ≥ 4.5.0
+### P1 · 迁移主体（已完成，全部经本机实跑验证）
+1. [x] [db/schema.ts](../app/db/schema.ts) 迁 `sqlite-core`；时间列统一 `{mode:"timestamp_ms"}`，`created_at` 显式 `(unixepoch()*1000)` 默认值
+2. [x] [drizzle.config.ts](../app/drizzle.config.ts) → `dialect: "sqlite"`（去 dotenv/DATABASE_URL）；**首次迁移已重新生成**：[db/migrations/0000_init_netease_sessions.sql](../app/db/migrations/0000_init_netease_sessions.sql)
+3. [x] [connection.ts](../app/api/queries/connection.ts) → `drizzle-orm/d1` 的**按请求**工厂 `createDb(env.DB)`；[context.ts](../app/api/context.ts) → 闭包工厂注入 `env`；[boot.ts](../app/api/boot.ts) 传入 `c.env`
+4. [x] [neteaseSession.ts](../app/api/neteaseSession.ts)：`getSession(db, cookieKey, req)`、**AES-GCM 加密 cookie**、**token 只存 SHA-256**、**无条件 `Secure`**、去 `NODE_ENV`、Cookie 解析 try/catch、`purgeExpiredSessions()` 供 Cron
+5. [x] 删除 [api/lib/vite.ts](../app/api/lib/vite.ts) 与 [boot.ts](../app/api/boot.ts) 的 node-server 分支；[lib/env.ts](../app/api/lib/env.ts) 去 dotenv、删死配置，改为 `Bindings` + `requireBindings()` 启动即校验
+6. [x] 单源部署配置：[wrangler.jsonc](../app/wrangler.jsonc)（Static Assets + `run_worker_first:["/api/*"]` + `not_found_handling: single-page-application` + `nodejs_compat` + D1 binding + `migrations_dir`）；[package.json](../app/package.json) 脚本改造（`dev:worker` / `build:worker` / `deploy` / `db:apply:local|remote` / `cf-typegen`）
+7. [x] [tsconfig.worker.json](../app/tsconfig.worker.json)（Workers 目标）+ [worker-configuration.d.ts](../app/worker-configuration.d.ts)（由 `wrangler types` 生成；改 wrangler.jsonc 后需重新生成）
+8. [x] 音频代理：HEAD 短路、`content-encoding` 时不再透传 `content-length`、**删除 `ACAO:*`**、id 限长
+9. [x] zod 升到 `^4.6.5`（≥4.5.0，官方对 Workers 内存的要求）；移除冗余的 `@cloudflare/workers-types`（已被 `wrangler types` 产物取代）
 
-### P2 · 加固与清理
-输入长度 max（`key`/`keyword`/`playlistId`）、`protectedQuery` 中间件、登录绑定（H2 的 `qr_bind`）、删 `ACAO:*`、`_headers` 安全头与 CSP（放行 Google Fonts）、Cron 会话清理、审计日志（不记 cookie）、轮询降频、`.env.example` 修正（无 JWT）、删 [http.ts](../app/api/lib/http.ts) 等死代码、补 [vitest.config.ts](../app/vitest.config.ts) 的 `@db` alias
+### P2 · 加固与清理（未完成，按放行条件 G8 排序）
+- [ ] 音频代理 **HMAC 短时效签名令牌**（D5/B1：当前仍是无令牌可匿名转发，只是不再下发 `ACAO:*`）→ 需同时改 [neteaseRouter.ts](../app/api/neteaseRouter.ts) 的 `songUrl.proxyUrl` 与代理路由
+- [ ] 登录绑定 `qr_bind`（H2：跨站 `qrcodeCheck` 可致会话注入）
+- [ ] `_headers` 安全头与 CSP（放行 Google Fonts）、`protectedQuery` 中间件（M2）、Cron 会话清理（免费档 5 个/账号）、审计日志（不记 cookie）、前端轮询降频、删 [api/lib/http.ts](../app/api/lib/http.ts) 死代码、`.env.example` 修正（无 JWT）
+
+---
+
+## 3.5 验证矩阵（**已执行**，P0+P1）
+
+| # | 检查 | 命令 | 结果 |
+|---|---|---|---|
+| V1 | 类型检查 | `tsc -b` | ✅ exit 0（前端 + Worker 双目标） |
+| V2 | 回归测试 | `vitest run` | ✅ **26/26 通过**（weapi 黄金向量 13 + 会话安全原语 13） |
+| V3 | 前端构建 | `vite build` | ✅ 6.9s，`dist/public` 1052 kB JS / 292 kB gzip |
+| V4 | Worker 打包 | `wrangler deploy --dry-run` | ✅ 1214.58 KiB / **gzip 216.88 KiB**，bindings: `env.DB` + `env.ENVIRONMENT` |
+| V5 | **G6 残留扫描** | grep bundle | ✅ `mysql2 / dotenv / @hono/node-server / import.meta.dirname / node:fs / node:path / node:net / node:tls / serve-static` 全部 **0** |
+| V6 | D1 迁移 | `wrangler d1 migrations apply DB --local` | ✅ 1 个迁移应用成功，表结构含毫秒默认值 |
+| V7 | 本地冒烟 | `wrangler dev` + curl | ✅ `/api/health`→`{ok:true}`；`trpc.ping`→200；`netease.me`→`loggedIn:false`；`proxy?id=abc`→400；`/api/nope`→JSON 404；`/`→静态 index.html（API 与静态资源同源共存，`run_worker_first` 未遮蔽） |
+| V8 | **二维码在无 DOM Worker 中可用**（A-03/R6 判定点） | curl `netease.qrcodeCreate` | ✅ HTTP 200，真实 unikey + `data:image/svg+xml;base64,…`（3226 字符）→ **SVG 路径确证可行** |
+| V9 | 会话全链路（D1 读 + AES-GCM 解密） | 注入会话行 + curl 带 cookie | ✅ 有效会话→`{loggedIn:true,userId:"90001",nickname:"e2e-user"}`；过期→`false`；畸形 `%`→HTTP 200（不 500，M3）；无 cookie→`false` |
+| V10 | 库内数据形态（H1 + 时间单位） | `node:sqlite` 直读本地库 | ✅ cookie 为 97 字符密文（`iv.ciphertext`）；过期行**已被懒清理**（仅剩 1 行）；`created_at=1791099700382` → `datetime(created_at/1000,'unixepoch')` = `2026-10-04 07:41:40`（无 1970/秒毫秒错配） |
+
+**仍未验证（需真实 CF 账号或生产环境，无法在本机取得）**：`wrangler deploy` 实际上线、**免费档 10 ms CPU 实测**（G5，本地 dev 未采集 CPU 时间）、1027/1102 真实触发、**网易云从 CF 出口 IP 的可达性**（G9，本机是经代理的本地出口，不代表 CF 边缘出口）、真实 `AnalyserNode` 频谱与拖动、iOS 兼容性。
+
+**本机环境注意事项（后续复现用）**：`wrangler dev` 可用；但 `wrangler d1 execute` 在部分时点会因 workerd 无法创建 `miniflare-email-store` 目录而启动失败 —— 此时改用 Node 24 内置 `node:sqlite` 直读 `.wrangler/state/v3/d1/**/*.sqlite`（本文件 V10 即此法）。另外 PowerShell 的 `Invoke-WebRequest -Headers@{Cookie=…}` **不会真正发出 Cookie 头**，冒烟测试必须用 `curl.exe -H "Cookie: …"`（曾因此误判为会话缺陷）。
 
 ---
 

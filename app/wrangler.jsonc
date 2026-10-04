@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "guanglu-lyric",
+  "main": "api/boot.ts",
+  "compatibility_date": "2026-09-01",
+  // node:crypto（weapi 的 AES-128-CBC + randomBytes）与 node:buffer 需要该标志；
+  // 官方文档核验：node:crypto 除 generateKeyPair(DSA/DH)/argon2/ed448/x448/FIPS 外全量支持（决策 D-2）
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    // 前端产物由 Vite 输出到此目录
+    "directory": "./dist/public",
+    // 仅 /api/* 先进入 Worker：静态资源请求免费且不计入 Workers 配额（决策 D-5 / 官方核验）
+    "run_worker_first": ["/api/*"],
+    // SPA 深链回落到 index.html；因 /api/* 已被 run_worker_first 拦截，不会遮蔽 API
+    "not_found_handling": "single-page-application"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "guanglu-lyric-db",
+      // 占位符：由 `wrangler d1 create guanglu-lyric-db` 输出的 database_id 替换
+      "database_id": "D1_DATABASE_ID_PLACEHOLDER",
+      // drizzle-kit 生成的迁移 SQL 落在此目录，由 wrangler 负责应用
+      "migrations_dir": "db/migrations"
+    }
+  ],
+  // 非敏感配置放这里；COOKIE_ENC_KEY / PROXY_SIGN_KEY 必须用 `wrangler secret put` 注入，
+  // 绝不能进 [vars]（会入 git 且 dashboard 明文可见，评审 M5）
+  "vars": {
+    "ENVIRONMENT": "production"
+  }
+}

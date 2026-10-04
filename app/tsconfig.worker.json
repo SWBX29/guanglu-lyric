@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    // Workers 运行时类型（D1Database / Fetcher …）。
+    // 保留 node 类型是因为 nodejs_compat 下要用 node:crypto（决策 D-2）；
+    // 代价：`fs`/`path` 这类 Node-only API 仍能通过类型检查，故 G6 门禁靠
+    // 打包期校验（esbuild/wrangler + grep）而不是仅靠 tsc（评审 R11）。
+    "types": ["node"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@contracts/*": ["./contracts/*"],
+      "@db/*": ["./db/*"]
+    }
+  },
+  // worker-configuration.d.ts 由 `wrangler types` 生成（含 workerd 运行时类型 + 由
+  // wrangler.jsonc 推导的 Env）。改动 wrangler.jsonc 后必须重新生成，否则类型与配置漂移。
+  "include": ["api", "contracts", "db", "worker-configuration.d.ts"]
+}

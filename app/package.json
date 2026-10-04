@@ -5,16 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
-    "lint": "eslint .",
+    "dev:worker": "wrangler dev",
+    "build": "vite build",
+    "build:worker": "wrangler deploy --dry-run --outdir dist/worker",
+    "deploy": "npm run build && wrangler deploy",
     "preview": "vite preview",
-    "start": "NODE_ENV=production node dist/boot.js",
     "check": "tsc -b",
-    "format": "prettier --write .",
     "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "cf-typegen": "wrangler types",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:apply:local": "wrangler d1 migrations apply DB --local",
+    "db:apply:remote": "wrangler d1 migrations apply DB --remote"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.3",
@@ -75,7 +78,7 @@
     "tailwind-merge": "^3.4.0",
     "three": "^0.186.0",
     "vaul": "^1.1.2",
-    "zod": "^4.3.5"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -101,6 +104,7 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4",
-    "vitest": "^4.0.16"
+    "vitest": "^4.0.16",
+    "wrangler": "^4.147.0"
   }
 }

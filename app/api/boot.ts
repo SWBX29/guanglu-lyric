@@ -1,34 +1,47 @@
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
-import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
-import { createContext } from "./context";
-import { env } from "./lib/env";
+import { createContextFactory } from "./context";
+import { requireBindings, type Bindings } from "./lib/env";
 import { ncm } from "./neteaseClient";
 import { getSession } from "./neteaseSession";
+import { createDb } from "./queries/connection";
 
-const app = new Hono<{ Bindings: HttpBindings }>();
+/**
+ * 单源部署的 Worker 入口（决策 D-1）：
+ * 静态资源由 Workers Static Assets 提供，本 Worker 只承接 /api/*（wrangler 中
+ * `run_worker_first = ["/api/*"]`）。因此这里不再有 node-server 启动分支，
+ * 也不再需要 `node:fs` 静态文件服务（评审 R3/R5：删除而不是 shim）。
+ */
+const app = new Hono<{ Bindings: Bindings }>();
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+/** 健康检查：用于部署后冒烟与保活，不回显任何绑定内容 */
+app.get("/api/health", (c) => {
+  const hasDb = Boolean(c.env.DB);
+  const hasKey = Boolean(c.env.COOKIE_ENC_KEY);
+  return c.json({ ok: hasDb && hasKey, storage: hasDb, key: hasKey, ts: Date.now() });
+});
 
 // 音频流式代理：解决网易云 mp3 无 CORS、Web Audio AnalyserNode 读不到频谱的问题
 // 透传 Range 头以支持拖动进度条
-app.get("/api/proxy/audio", async (c) => {
+app.on(["GET", "HEAD"], "/api/proxy/audio", async (c) => {
   const id = c.req.query("id");
-  if (!id || !/^\d+$/.test(id)) {
+  if (!id || !/^\d+$/.test(id) || id.length > 20) {
     return c.json({ error: "invalid id" }, 400);
   }
-  const session = await getSession(c.req.raw);
+  const env = requireBindings(c.env);
+  const session = await getSession(createDb(env.DB), env.COOKIE_ENC_KEY, c.req.raw);
   const urlRes = await ncm.songUrlV1(id, session?.neteaseCookie);
   const data = urlRes.body?.data?.[0];
   if (!data?.url) {
     return c.json({ error: "unplayable", reason: data?.message ?? "no url" }, 404);
   }
+  const isHead = c.req.method === "HEAD";
   const upstreamHeaders: Record<string, string> = {};
   const range = c.req.header("range");
   if (range) upstreamHeaders["Range"] = range;
   const upstream = await fetch(data.url, {
+    method: isHead ? "HEAD" : "GET",
     headers: upstreamHeaders,
     redirect: "follow",
   });
@@ -36,13 +49,18 @@ app.get("/api/proxy/audio", async (c) => {
     return c.json({ error: "upstream error", status: upstream.status }, 502);
   }
   const headers = new Headers();
-  for (const h of ["content-type", "content-length", "accept-ranges", "content-range"]) {
+  for (const h of ["content-type", "accept-ranges", "content-range"]) {
     const v = upstream.headers.get(h);
     if (v) headers.set(h, v);
   }
+  // 仅在响应未被压缩时透传 content-length：边缘自动解压会使它与实际字节数不符（评审 R12）
+  if (!upstream.headers.get("content-encoding")) {
+    const len = upstream.headers.get("content-length");
+    if (len) headers.set("content-length", len);
+  }
   if (!headers.has("accept-ranges")) headers.set("accept-ranges", "bytes");
-  // 允许前端跨源读取（同源部署下无影响）
-  headers.set("access-control-allow-origin", "*");
+  // 同源部署下不需要 CORS 头；不再下发 `access-control-allow-origin: *`（评审 M1）
+  if (isHead) return new Response(null, { status: upstream.status, headers });
   return new Response(upstream.body, { status: upstream.status, headers });
 });
 
@@ -51,20 +69,10 @@ app.use("/api/trpc/*", async (c) => {
     endpoint: "/api/trpc",
     req: c.req.raw,
     router: appRouter,
-    createContext,
+    createContext: createContextFactory(requireBindings(c.env)),
   });
 });
+
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 export default app;
-
-if (env.isProduction) {
-  const { serve } = await import("@hono/node-server");
-  const { serveStaticFiles } = await import("./lib/vite");
-  serveStaticFiles(app);
-
-  const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
-}

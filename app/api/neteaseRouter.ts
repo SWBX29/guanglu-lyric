@@ -2,6 +2,7 @@ import { z } from "zod";
 import QRCode from "qrcode";
 import { TRPCError } from "@trpc/server";
 import { createRouter, publicQuery } from "./middleware";
+import type { TrpcContext } from "./context";
 import { ncm } from "./neteaseClient";
 import {
   createSession,
@@ -69,13 +70,25 @@ async function fillCovers(songs: NeteaseSong[], cookie?: string): Promise<Neteas
   }
 }
 
-/** 需要网易云登录：取会话或抛 401，返回会话里的网易云 cookie */
-async function requireNeteaseSession(req: Request) {
-  const session = await getSession(req);
+/** 需要网易云登录：取会话或抛 401，返回解密后的网易云 cookie */
+async function requireNeteaseSession(ctx: TrpcContext) {
+  const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
   if (!session) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "请先扫码登录网易云音乐" });
   }
   return session;
+}
+
+/**
+ * 把 SVG 文本转成 data URL。
+ * Worker 无 DOM，`QRCode.toDataURL` 会走 canvas 渲染器（已实测确证），
+ * 故改用纯字符串的 SVG 渲染器（评审 R6 / A-03，契约字段 qrDataUrl 不变）。
+ */
+function svgToDataUrl(svg: string): string {
+  const bytes = new TextEncoder().encode(svg);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return `data:image/svg+xml;base64,${btoa(bin)}`;
 }
 
 export const neteaseRouter = createRouter({
@@ -84,16 +97,17 @@ export const neteaseRouter = createRouter({
     const res = await ncm.loginQrKey();
     const key: string = res.body?.data?.unikey ?? res.body?.unikey;
     if (!key) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "获取 unikey 失败" });
-    const qrDataUrl = await QRCode.toDataURL(`https://music.163.com/login?codekey=${key}`, {
+    const svg = await QRCode.toString(`https://music.163.com/login?codekey=${key}`, {
+      type: "svg",
       margin: 1,
       width: 320,
     });
-    return { key, qrDataUrl };
+    return { key, qrDataUrl: svgToDataUrl(svg) };
   }),
 
   /** 第二步：前端轮询扫码状态；803 成功时建立服务端会话并下发 session cookie */
   qrcodeCheck: publicQuery
-    .input(z.object({ key: z.string().min(1) }))
+    .input(z.object({ key: z.string().min(1).max(128) }))
     .query(async ({ ctx, input }): Promise<NeteaseQrcodeCheckResult> => {
       const res = await ncm.loginQrCheck(input.key);
       const code: number = res.body?.code ?? 0;
@@ -117,14 +131,19 @@ export const neteaseRouter = createRouter({
       } catch {
         // 资料获取失败不阻断登录
       }
-      const token = await createSession({ neteaseCookie, neteaseUserId: userId, nickname, avatarUrl });
+      const token = await createSession(ctx.db, ctx.cookieKey, {
+        neteaseCookie,
+        neteaseUserId: userId,
+        nickname,
+        avatarUrl,
+      });
       setSessionCookie(ctx.resHeaders, token);
       return { code, status: "success", message: message || "登录成功" };
     }),
 
   /** 当前登录状态（昵称/头像，不含 cookie） */
   me: publicQuery.query(async ({ ctx }): Promise<NeteaseMe> => {
-    const session = await getSession(ctx.req);
+    const session = await getSession(ctx.db, ctx.cookieKey, ctx.req);
     if (!session) return { loggedIn: false };
     return {
       loggedIn: true,
@@ -136,14 +155,14 @@ export const neteaseRouter = createRouter({
 
   /** 退出登录 */
   logout: publicQuery.mutation(async ({ ctx }): Promise<{ ok: true }> => {
-    await destroySession(ctx.req);
+    await destroySession(ctx.db, ctx.req);
     clearSessionCookie(ctx.resHeaders);
     return { ok: true };
   }),
 
   /** 搜索歌曲（匿名可用） */
   searchSongs: publicQuery
-    .input(z.object({ keyword: z.string().min(1), limit: z.number().int().min(1).max(100).optional() }))
+    .input(z.object({ keyword: z.string().min(1).max(100), limit: z.number().int().min(1).max(100).optional() }))
     .query(async ({ input }): Promise<NeteaseSong[]> => {
       const res = await ncm.search(input.keyword, input.limit ?? 20);
       const songs = res.body?.result?.songs ?? [];
@@ -152,7 +171,7 @@ export const neteaseRouter = createRouter({
 
   /** 我的歌单（需登录） */
   myPlaylists: publicQuery.query(async ({ ctx }): Promise<NeteasePlaylist[]> => {
-    const session = await requireNeteaseSession(ctx.req);
+    const session = await requireNeteaseSession(ctx);
     const res = await ncm.userPlaylist(session.neteaseUserId, session.neteaseCookie);
     const playlists = res.body?.playlist ?? [];
     return playlists.map(mapPlaylist);
@@ -162,7 +181,7 @@ export const neteaseRouter = createRouter({
   playlistTracks: publicQuery
     .input(z.object({ playlistId: z.number().int().positive() }))
     .query(async ({ ctx, input }): Promise<NeteaseSong[]> => {
-      const session = await requireNeteaseSession(ctx.req);
+      const session = await requireNeteaseSession(ctx);
       const res = await ncm.playlistTrackAll(input.playlistId, session.neteaseCookie);
       const songs = res.body?.songs ?? [];
       return fillCovers(songs.map(mapSong), session.neteaseCookie);
