@@ -235,13 +235,12 @@ export const neteaseRouter = createRouter({
         if (data?.fee === 1 || data?.fee === 4) {
           return { playable: false, reason: "VIP/付费歌曲，暂无播放权限" };
         }
-        // API 失败：探测外链是否真能出音频；成功则本 isolate 后续直接走外链
+        // API 失败：探测外链端点是否可用（网易云对云端出口可能放行、也可能返回风控验证页）
         const probe = await probeOuterPlayable(id);
         if (!probe.playable) {
-          // TODO(临时诊断 2026-10-04)：定位 CF 出口探测失败原因后收敛为固定话术
           return {
             playable: false,
-            reason: `该歌曲暂无法播放，可尝试扫码登录后重试［${probe.detail}］`,
+            reason: "该歌曲暂无法播放：网易云限制了云端出口取链（本地运行不受影响，可稍后重试）",
           };
         }
         markApiFailed(id);
