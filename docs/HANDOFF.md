@@ -12,14 +12,14 @@
 | **线上地址** | https://guanglu-lyric.1663988203.workers.dev |
 | **当前 Worker 版本** | `8ddf40c7-d850-4cdd-a12f-7e972237ceca`（2026-10-04 首次由 CI 发布，gzip 218.87 KiB / startup 21 ms）。**注意：此后每次 master push 都会由 CI 自动重新发布，最新版本以 `wrangler deployments list` 为准** |
 | Cloudflare 账号 | `1663988203@qq.com's Account` / account id `c5b214ba182d8c1a2880bff2613c2bb8`（OAuth 已登录，凭据存于本机 wrangler 配置） |
-| D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；远端已应用迁移 `0000_init_netease_sessions.sql` |
+| D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；远端已应用迁移 `0000`（会话表）+ `0001`（audit_events） |
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY` 已在 CF 侧设置（本地副本在 `app/.dev.vars`，已 gitignore） |
 | Cron | `23 4 * * *`（每天清理过期会话） |
 | Git | 已推送到 **https://github.com/SWBX29/guanglu-lyric**（Public，master，含全部历史）；本地工作树 clean |
-| 质量门 | `tsc -b` exit 0 ｜ `vitest` **44/44** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 38–39s 全绿、deploy 32s 实发成功 |
-| 代码状态 | **可直接使用**；剩 2 条非阻断待办（自定义域名、审计日志）+ 1 项需人工用手机扫码验证 |
+| 质量门 | `tsc -b` exit 0 ｜ `vitest` **55/55** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 29–39s 全绿、deploy 25–32s 实发成功 |
+| 代码状态 | **可直接使用**；剩 1 条非阻断待办（自定义域名）+ 1 项需人工用手机扫码验证（顺带核对审计行） |
 
-**一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；唯一未人工验证的是"真人扫码登录 + 播放频谱"（需要手机与浏览器）。
+**一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；GitHub Actions CI（push 即自动发布）与结构化审计日志均已完成；唯一未人工验证的是"真人扫码登录 + 播放频谱"（需要手机与浏览器）。
 
 ---
 
@@ -66,6 +66,8 @@
 ---
 
 ## 4. 代码改动清单（逐文件）
+
+> 本清单为**迁移阶段**的逐文件记录；后续迭代（Vite 代理、GitHub CI、审计日志）见 §5 提交历史与 §12。
 
 ### 新增
 
@@ -138,15 +140,18 @@
 | `7c80af4` | fix：run.mjs 注入 `WRANGLER_LOG_PATH`——修掉沙箱内 wrangler 因日志写入被拒而退出码为 1 的假失败（§8 陷阱 12） |
 | `2971ff4` | fix：Vite dev 改 `/api` 代理到 8787——修复本地全栈开发绑定全丢（§8 陷阱 10） |
 | `a40d94d` | ci：GitHub Actions 工作流（检查/测试/构建 + 门控部署 Cloudflare Workers）；仓库推送至 GitHub |
+| `01f61a2` | docs：CI 上线并验证记录（§0/§5/§12） |
+| `22291cc` | docs：版本行改为可查询表述；§6 验证矩阵补 V26/V27 |
+| `abbbdad` | feat：结构化审计日志（login/logout/Cron 清理/代理拒绝；哈希 + 防刷节流 + 90 天保留） |
 
 ---
 
-## 6. 验证矩阵（V1–V27，全部实际执行过）
+## 6. 验证矩阵（V1–V28，全部实际执行过）
 
 | # | 检查 | 命令/方法 | 结果 |
 |---|---|---|---|
 | V1 | 类型检查 | `tsc -b` | ✅ exit 0（前端 + Worker 双目标） |
-| V2/V13/V19 | 回归测试 | `vitest run` | ✅ **44/44**（weapi 13 + 会话 13 + 代理令牌 9 + 登录绑定 9） |
+| V2/V13/V19 | 回归测试 | `vitest run` | ✅ **44/44**（weapi 13 + 会话 13 + 代理令牌 9 + 登录绑定 9；现为 **55/55**，见 V28） |
 | V3 | 前端构建 | `vite build` | ✅ 1052 kB JS / 292 kB gzip |
 | V4 | Worker 打包 | `wrangler deploy --dry-run` | ✅ gzip 216.88 KiB（早期）→ 线上 218.87 KiB |
 | V5 | **G6 残留扫描** | grep bundle | ✅ `mysql2/dotenv/@hono/node-server/import.meta.dirname/node:fs/node:path/node:net/node:tls/serve-static` **全 0** |
@@ -170,6 +175,7 @@
 | V25 | Vite dev 下的 API 行为（交接前补测） | `npm run dev` + curl | ⚠️ `/api/health` 返回 `{"ok":false,"storage":false,"key":false}` —— **Vite dev 的 `/api/*` 没有绑定**（`@hono/vite-dev-server` 不传 `env`）。已写入 §8 陷阱 10；该修法已于 2026-10-04 实施（见 V26） |
 | V26 | 本地双服务代理（陷阱 10 修复后） | `npm run dev:worker` + `npm run dev` 双后台 + curl | ✅ `localhost:3000/api/health` → `{"ok":true,"storage":true,"key":true}`；`/api/proxy/audio` 无签名 403、`/api/nope` JSON 404 均经 Vite 代理正确透传（修复前 health 全 false） |
 | V27 | **GitHub Actions CI 端到端** | 共 3 次运行：push 首跑 / 手动触发 / 推送文档再触发 | ✅ verify 32–39s 全绿；deploy 25–32s 实发成功（首版 `8ddf40c7`，gzip 218.87 KiB / startup 21 ms）；未配 token 时 deploy 正确跳过并打 notice |
+| V28 | **审计日志端到端** | 本地 dev + curl（代理拒绝×3 / 同 reason 重复 / 注入会话登出 / `cdn-cgi` 触发 Cron）+ D1 读回 | ✅ 落库 6 行：`proxy_rejected`×3（带 IP HMAC；同 reason 连发 2 次仅 1 行=**节流生效**）、`logout`（带主体哈希，证明 AES-GCM 密文会话可解密读取）、`session_expired_purge` `purged:0`→`purged:1`（**meta.changes 提取正确**，过期行被删）；55/55 单测覆盖哈希/节流/吞错；`login_success` 待真人扫码（见 §9） |
 
 ---
 
@@ -208,6 +214,9 @@
    → **可用推送命令（本机实测成功）**：`git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900" -c credential.helper= -c "credential.helper=!gh auth git-credential" push -u origin master`（保持 `GH_TOKEN` 在环境中 → 用集成 token；若清空 `GH_TOKEN` 会退回 keyring token，推含 workflow 的提交会被拒）。
    → 备选：给 keyring OAuth 账号补作用域 `gh auth refresh -h github.com -s workflow`（需浏览器设备码确认）。
    → 另注意：`gh repo create` 用集成 token 会报 `Resource not accessible by integration` —— 把 `$env:GH_TOKEN` 清空后用 keyring token 创建即可。
+14. **沙箱内 workerd 的 SQLite 状态初始化会崩 → `wrangler d1` 本地命令必须沙箱外跑**：沙箱内执行 `db:apply:local` / `d1 execute --local` 会以 `Fatal uncaught kj::Exception: … no such table: _cf_ALARM: SQLITE_ERROR` + `Assertion failed … uv async.c` 崩掉，现场只剩 0 字节 `metadata.sqlite-journal`（未提交事务）；**全新状态同样复现**（不是旧状态/残留进程问题），**沙箱外同样命令则一次通过**。
+   → 解法：`db:apply:local`、`d1 execute --local`（含 `--file`）以及需要 D1 写入的本地验证，一律在沙箱外执行。
+   → 本地手动触发 Cron：`curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled?cron=23+4+*+*+*"`（返回 `ok`）；注意 `--test-scheduled` 的 `/__scheduled` 会被 Static Assets 的 SPA 回落遮蔽（实测）。
 
 ---
 
@@ -215,12 +224,12 @@
 
 | 项 | 说明 |
 |---|---|
-| **真人扫码登录** | 接口层已验证（801/错误分支/D1 读写/加密解密），但**没人用手机真扫过**。这是唯一需要人工的验证 |
+| **真人扫码登录** | 接口层已验证（801/错误分支/D1 读写/加密解密），但**没人用手机真扫过**。这是唯一需要人工的验证；扫码成功后可在 D1 `audit_events` 核对新增的 `login_success` 行（审计的最后一块拼图） |
 | **播放 + 频谱 + 拖动 seek** | 逻辑与代理已验证（206 + 8 MiB + MP3 字节），但没在浏览器里听过 |
 | **iOS/Safari 兼容** | `AudioContext` 手势要求、`crossOrigin` + Range 行为未实测 |
 | **G5 CPU 持续观察** | 102–123 ms 峰值高于文档 10 ms 名义值却未被拒（isolate 弹性）；若流量增大出现 `1102`，瘦身顺序：① `songUrl`/`lyric` 加平台缓存 ② 二维码改前端渲染（需与 H2 绑定一起评估）③ weapi 链路去 zod |
 | **`workers.dev` 在墙内可达性** | 大陆访问常被干扰；要面向墙内用户需绑自定义域名 |
-| **未做（非阻断）** | 结构化审计日志、上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销 |
+| **未做（非阻断）** | 上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销 |
 
 ---
 
@@ -232,13 +241,13 @@
 cd E:\AIwork\Kimi_Agent\app
 
 npm run check        # tsc -b（前端 + Worker 双目标）
-npm run test         # vitest，应为 44/44
+npm run test         # vitest，应为 55/55
 npm run build        # vite build → dist/public
 npm run dev          # 前端 HMR（/api/* 由 Vite 代理转发到 8787，需先起 dev:worker → 见 §8 陷阱 10）
 npm run dev:worker   # ★ 全栈本地开发用这个：Worker + 本地 D1 + secrets，端口 8787
 npm run deploy       # 构建 + 发布（幂等，可反复执行）
 npm run cf-typegen   # 改过 wrangler.jsonc 后必须跑
-npm run db:apply:local / db:apply:remote   # 应用 D1 迁移
+npm run db:apply:local / db:apply:remote   # 应用 D1 迁移（沙箱内 workerd 会崩，须沙箱外跑 → §8 陷阱 14）
 npm run db:generate  # 改过 db/schema.ts 后生成迁移
 ```
 
@@ -247,6 +256,7 @@ npm run db:generate  # 改过 db/schema.ts 后生成迁移
 ```powershell
 node scripts/run.mjs wrangler d1 execute DB --remote --command "SELECT COUNT(*) FROM netease_sessions"
 node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错误（G5）
+curl "http://127.0.0.1:8787/cdn-cgi/handler/scheduled?cron=23+4+*+*+*"    # 本地手动触发 Cron（§8 陷阱 14）
 ```
 
 ### 推送代码到 GitHub（本机必须带代理与集成 token，详见 §8 陷阱 13）
@@ -287,9 +297,9 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 1. 读 `docs/cloudflare-migration.md`（决策 + 免费档边界 + **V1–V24 验证矩阵**）。
 2. 读 `app/api/boot.ts` + `app/api/lib/env.ts` + `app/wrangler.jsonc`（运行时入口与绑定契约）。
 3. 读 `app/api/neteaseSession.ts` + `app/api/lib/proxyToken.ts` + `app/api/lib/loginBind.ts`（三条安全主线）。
-4. 跑一遍 `npm run check && npm run test`，确认 44/44 与 tsc 绿（这是"当前基线"）。
+4. 跑一遍 `npm run check && npm run test`，确认 55/55 与 tsc 绿（这是"当前基线"）。
 5. 若要做功能迭代：**先跑 `npm run dev:worker` + `npm run dev`（双终端，见 §8 陷阱 10）**，改完再 `npm run deploy`。
-6. 若遇到构建/运行报错：**优先查 §8 的 13 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
+6. 若遇到构建/运行报错：**优先查 §8 的 14 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"（以及"是否该在沙箱外跑"）。
 
 ---
 
@@ -301,4 +311,4 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
    - Secrets：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 均已配置。**校验 token 要用账户级端点** `GET /client/v4/accounts/<id>/tokens/verify`（`/user/tokens/verify` 对账户 token 会误报 Invalid，别被误导）。
    - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
 2. **自定义域名**：解决墙内可达性（本网络实测 workers.dev 边缘 IP 被黑洞）；需用户提供域名（Cloudflare 免费支持，配置为 `wrangler.jsonc` 的 `routes` 或 dashboard 绑定）。
-3. **审计日志**：会话建/毁、扫码成功、代理滥用四类事件结构化记录（D1 写入行数需留意免费额度，只记事件与哈希，不记 cookie）。
+3. **审计日志 —— ✅ 已完成（2026-10-04）**：新增 `audit_events` 表（迁移 `0001`，本地与远端均已应用）。四类事件：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`；主体只落 HMAC-SHA256（netease uid / 客户端 IP），绝不落 cookie 与明文 IP；代理拒绝带「每 isolate × 每 reason × 60s 最多一行」防刷节流（避免滥用流量借审计打爆 D1 免费写额度）；Cron 每日顺带清理超 90 天旧事件。端到端验证见 §6 V28。
