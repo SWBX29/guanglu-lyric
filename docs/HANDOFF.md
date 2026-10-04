@@ -16,10 +16,10 @@
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY` 已在 CF 侧设置（本地副本在 `app/.dev.vars`，已 gitignore） |
 | Cron | `23 4 * * *`（每天清理过期会话） |
 | Git | 已推送到 **https://github.com/SWBX29/guanglu-lyric**（Public，master，含全部历史）；本地工作树 clean |
-| 质量门 | `tsc -b` exit 0 ｜ `vitest` **55/55** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 29–39s 全绿、deploy 25–32s 实发成功 |
-| 代码状态 | **可直接使用**；剩 1 条非阻断待办（自定义域名）+ 1 项需人工用手机扫码验证（顺带核对审计行） |
+| 质量门 | `tsc -b` exit 0 ｜ `vitest` **60/60** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ bundle 无 Node-only 残留 ｜ **GitHub Actions CI**：verify 28–39s 全绿、deploy 25–34s 实发成功 |
+| 代码状态 | **可直接使用**；自定义域名/CI/审计等收尾全部完成；剩 1 项人工验证（手机扫码）。注意：**生产播放受网易云对 CF 出口的风控限制**（§9/V29，本地运行不受影响） |
 
-**一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；GitHub Actions CI（push 即自动发布）与结构化审计日志均已完成；唯一未人工验证的是"真人扫码登录 + 播放频谱"（需要手机与浏览器）。
+**一句话结论**：原 MySQL/Node 全栈工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），全部评审阻断项已关闭并逐项实测；GitHub Actions CI（push 即自动发布）与结构化审计日志均已完成；唯一未人工验证的是"真人扫码登录 + 播放"，且**生产环境播放受网易云对云出口的风控限制**（§9/V29；本地运行完整可用）。
 
 ---
 
@@ -145,10 +145,14 @@
 | `abbbdad` | feat：结构化审计日志（login/logout/Cron 清理/代理拒绝；哈希 + 防刷节流 + 90 天保留） |
 | `00a41c1` | docs：HANDOFF 同步审计日志（V28 / §8 陷阱 14 / §12 等） |
 | `ccf72ff` | feat：绑定自定义域名 `lyric.swbx.cc.cd`（保留 workers.dev 双入口；关闭 Preview URLs） |
+| `9ad510d` | fix：播放链路外链兜底（API 取链失败时回退公开外链端点，含探测与缓存） |
+| `01dafb8` | fix：外链探测与代理取流补显式 User-Agent（空 UA 会被退回 302 错误链） |
+| `c751554` | chore：探测失败诊断信息临时透出（一次性，随后收敛） |
+| `2106ebd` | chore：收敛取链失败话术（定位网易云风控 code=-462）；移除临时诊断 |
 
 ---
 
-## 6. 验证矩阵（V1–V28，全部实际执行过）
+## 6. 验证矩阵（V1–V29，全部实际执行过）
 
 | # | 检查 | 命令/方法 | 结果 |
 |---|---|---|---|
@@ -178,6 +182,7 @@
 | V26 | 本地双服务代理（陷阱 10 修复后） | `npm run dev:worker` + `npm run dev` 双后台 + curl | ✅ `localhost:3000/api/health` → `{"ok":true,"storage":true,"key":true}`；`/api/proxy/audio` 无签名 403、`/api/nope` JSON 404 均经 Vite 代理正确透传（修复前 health 全 false） |
 | V27 | **GitHub Actions CI 端到端** | 共 3 次运行：push 首跑 / 手动触发 / 推送文档再触发 | ✅ verify 32–39s 全绿；deploy 25–32s 实发成功（首版 `8ddf40c7`，gzip 218.87 KiB / startup 21 ms）；未配 token 时 deploy 正确跳过并打 notice |
 | V28 | **审计日志端到端** | 本地 dev + curl（代理拒绝×3 / 同 reason 重复 / 注入会话登出 / `cdn-cgi` 触发 Cron）+ D1 读回 | ✅ 落库 6 行：`proxy_rejected`×3（带 IP HMAC；同 reason 连发 2 次仅 1 行=**节流生效**）、`logout`（带主体哈希，证明 AES-GCM 密文会话可解密读取）、`session_expired_purge` `purged:0`→`purged:1`（**meta.changes 提取正确**，过期行被删）；55/55 单测覆盖哈希/节流/吞错；`login_success` 待真人扫码（见 §9） |
+| V29 | **生产取链失败根因定位** | 本地 vs 生产同 id 对照 + 一次性探针 Worker（6 条候选链路，用后已删） | ✅ 本地（中国出口）：206 + 真实 MP3；生产（CF 出口）：weapi `code:404`、外链端点 `200 text/html`、传统明文 API `code:-462`（**风控验证页**"验证成功后，可进行下一步操作哦~"）→ 结论：**网易云对云出口的播放取链下发风控挑战**，非代码缺陷（`song/detail` 等普通接口从 CF 正常）；同期修复：`songUrl` 补传会话 cookie（与代理一致）+ 外链兜底链路（命中即用、isolate 缓存、空 UA 修复） |
 
 ---
 
@@ -231,6 +236,7 @@
 | **iOS/Safari 兼容** | `AudioContext` 手势要求、`crossOrigin` + Range 行为未实测 |
 | **G5 CPU 持续观察** | 102–123 ms 峰值高于文档 10 ms 名义值却未被拒（isolate 弹性）；若流量增大出现 `1102`，瘦身顺序：① `songUrl`/`lyric` 加平台缓存 ② 二维码改前端渲染（需与 H2 绑定一起评估）③ weapi 链路去 zod |
 | **墙内可达性** | 本机直连 workers.dev 被黑洞（经代理可达）；已绑自定义域名 `lyric.swbx.cc.cd`（§12-2），但其可达性同样受 CF 边缘 IP 干扰情况影响，属尽力而为 |
+| **生产播放受限（已定位）** | 网易云对 CF 出口的取链端点下发风控挑战（`code:-462`）→ 生产环境无法拉起播放（UI 已给出明确话术）；搜索/登录/歌词/审计等全部不受影响，本地运行（中国出口）播放完整可用。兜底链路已就位（网易云若放宽即自动恢复）；候选后续方案：① 客户端直连播放（手机在中国出口，**无频谱**，待验证）② 自建中国出口中继（Cloudflare Tunnel，重） |
 | **未做（非阻断）** | 上游错误文案收敛、`chart.tsx` 的 `dangerouslySetInnerHTML`（静态输入）、会话滑动续期/批量撤销 |
 
 ---
@@ -314,3 +320,4 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
    - 本机 git push 的特殊要求见 §8 陷阱 13（走代理 + 用集成 token），命令见 §10。
 2. **自定义域名 —— ✅ 已完成（2026-10-04）**：`lyric.swbx.cc.cd`（zone `swbx.cc.cd`，同账户）已绑定，DNS 与证书由 CF 自动管理；实测双入口同时可用（自定义域名 + workers.dev，后者以 `workers_dev: true` 显式保留——wrangler 检测到 routes 会默认停用它）。绑定路径：`wrangler.jsonc` 的 `routes[].custom_domain`，由本地 wrangler OAuth 部署完成（账户 API token 调 `/accounts/*/workers/domains` 返回 10405，不能用于绑定）。另显式 `preview_urls: false`，关闭未使用的预览 URL。**CI 部署兼容性已实测通过**：push 携带该 routes 配置的 CI 部署全绿（run `37197981932`，deploy 31s）——CI token 对既有绑定是无操作，无需 zone 路由写权限。
 3. **审计日志 —— ✅ 已完成（2026-10-04）**：新增 `audit_events` 表（迁移 `0001`，本地与远端均已应用）。四类事件：`login_success` / `logout` / `session_expired_purge` / `proxy_rejected`；主体只落 HMAC-SHA256（netease uid / 客户端 IP），绝不落 cookie 与明文 IP；代理拒绝带「每 isolate × 每 reason × 60s 最多一行」防刷节流（避免滥用流量借审计打爆 D1 免费写额度）；Cron 每日顺带清理超 90 天旧事件。端到端验证见 §6 V28。
+4. **生产播放（新发现，待定）**：网易云对 CF 出口的播放取链下发风控挑战（§6 V29）——生产环境暂时无法拉起播放，UI 话术已收敛；本地运行不受影响。候选方案见 §9（客户端直连无频谱 / 自建中国出口中继），等待手机端验证结果。
