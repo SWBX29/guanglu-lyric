@@ -25,6 +25,11 @@ process.env.TEMP = tmp;
 process.env.TMP = tmp;
 process.env.TMPDIR = tmp;
 
+// wrangler 的调试日志默认写全局配置目录（%APPDATA%\xdg.config\.wrangler\logs），
+// 受限沙箱拒绝写入时，即使真实命令已成功，它也会以 exit 1 结束（误判为失败）。
+// 指到项目内兜住 —— 见 docs/HANDOFF.md §8 陷阱 12。
+process.env.WRANGLER_LOG_PATH = path.join(tmp, 'wrangler-logs');
+
 // 把本地 bin 目录加入 PATH：npm 运行脚本时会自动注入，但直接执行
 // `node scripts/run.mjs wrangler ...` 时不会，这里统一兜住。
 const binDir = path.join(appRoot, 'node_modules', '.bin');

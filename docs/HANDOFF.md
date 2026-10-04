@@ -71,7 +71,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| `app/scripts/run.mjs` | **所有 npm 脚本的统一入口**：把 `TEMP/TMP/TMPDIR` 指向项目内 `.tmp/`、把 `node_modules/.bin` 注入 PATH、Windows 下自行转义参数。根因见 §8 陷阱 2/3 |
+| `app/scripts/run.mjs` | **所有 npm 脚本的统一入口**：把 `TEMP/TMP/TMPDIR` 指向项目内 `.tmp/`、把 `WRANGLER_LOG_PATH` 指到 `.tmp/wrangler-logs`、把 `node_modules/.bin` 注入 PATH、Windows 下自行转义参数。根因见 §8 陷阱 2/3/12 |
 | `app/wrangler.jsonc` | 单源部署配置：`main=api/boot.ts`、`compatibility_flags:["nodejs_compat"]`、`assets`（`directory`/`run_worker_first`/`not_found_handling`）、`triggers.crons`、`d1_databases`（binding `DB`）、`observability` |
 | `app/tsconfig.worker.json` | API 层编译目标（`types:["node"]` + `worker-configuration.d.ts` 提供 Workers 运行时类型） |
 | `app/worker-configuration.d.ts` | `wrangler types` 生成（含 workerd 运行时类型 + 由 wrangler.jsonc 推导的 `Env`）。**改动 wrangler.jsonc 后必须重新生成** |
@@ -195,6 +195,9 @@
    → **结论：全栈本地开发的正确入口是 `npm run dev:worker`**（wrangler dev，提供绑定 + 本地 D1，端口 8787）。
    → 建议修法（**尚未实施**）：`vite.config.ts` 去掉 `devServer()` 改为 `server.proxy = { "/api": "http://127.0.0.1:8787" }`，然后两个终端分别跑 `npm run dev:worker` 与 `npm run dev`，即可同时拿到绑定与前端 HMR。
 11. **`localhost` vs `127.0.0.1`**：Vite/部分工具默认只绑 `localhost`（IPv6 `::1`），用 `127.0.0.1` 访问会得到 `HTTP 000`。冒烟时优先用 `localhost`。
+12. **沙箱内 wrangler 写日志被拒 → exit 1（后果其实已成功）**：wrangler 启动时会先写调试日志到 `%APPDATA%\xdg.config\.wrangler\logs\`（源码默认值 `getGlobalConfigPath()/logs`，**与 TEMP 无关**，所以 `scripts/run.mjs` 的临时目录重定向管不到它）。TRAE 沙箱拒绝写该路径 → 打印 `X [ERROR] Failed to write to log file … EPERM` 加 `TRAE Sandbox Error`；**命令的真实输出完整有效，但进程以 exit 1 结束** —— 这是纯日志文件问题，不是命令失败，却会让 `&&` 链/脚本误判。
+   → **解法（已实测并已固化）**：`scripts/run.mjs` 已统一注入 `WRANGLER_LOG_PATH` 到项目内 `.tmp/wrangler-logs`（与 TEMP 重定向同处），凡经它启动的 wrangler 命令日志正常落地、exit 0（wrangler 用它作日志目录，默认才是全局配置目录）。手工等效：`$env:WRANGLER_LOG_PATH = "<app>\.tmp\wrangler-logs"`。
+   → 备选：沙箱外执行该命令，或在 TRAE「设置 → 权限与审批 → 自定义配置」放行该目录。
 
 ---
 
@@ -270,7 +273,7 @@ node scripts/run.mjs wrangler tail guanglu-lyric --format json     # 看 CPU/错
 3. 读 `app/api/neteaseSession.ts` + `app/api/lib/proxyToken.ts` + `app/api/lib/loginBind.ts`（三条安全主线）。
 4. 跑一遍 `npm run check && npm run test`，确认 44/44 与 tsc 绿（这是"当前基线"）。
 5. 若要做功能迭代：**先跑 `npm run dev`（或 `dev:worker`）**，改完再 `npm run deploy`。
-6. 若遇到构建/运行报错：**优先查 §8 的 9 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
+6. 若遇到构建/运行报错：**优先查 §8 的 12 条陷阱**，尤其"是否忘了走 `scripts/run.mjs`"。
 
 ---
 
