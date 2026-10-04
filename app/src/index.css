@@ -1,0 +1,357 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+:root { --lyric-glow: #ffd98a; }
+
+.font-serif-sc {
+  font-family: 'Noto Serif SC', 'SimSun', 'Songti SC', serif;
+}
+
+.lyric-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  font-family: 'Noto Serif SC', 'SimSun', 'Songti SC', serif;
+  font-weight: 500;
+  font-size: 20px;
+  letter-spacing: 0.14em;
+  color: rgba(255, 250, 238, 0.92);
+  text-shadow:
+    0 0 6px var(--lyric-glow),
+    0 0 18px var(--lyric-glow),
+    0 0 42px color-mix(in srgb, var(--lyric-glow) 60%, transparent);
+  transition: opacity 0.35s ease;
+  will-change: transform, opacity;
+  z-index: 10;
+}
+
+.lyric-current {
+  font-weight: 700;
+  font-size: 24px;
+  color: #fffdf6;
+  text-shadow:
+    0 0 8px var(--lyric-glow),
+    0 0 26px var(--lyric-glow),
+    0 0 60px var(--lyric-glow);
+  animation: lyric-glow-breathe 2.6s ease-in-out infinite;
+}
+
+/* ===== 歌词字幕高级动效 ===== */
+
+/* 当前行发光呼吸（text-shadow 脉动） */
+@keyframes lyric-glow-breathe {
+  0%, 100% {
+    text-shadow:
+      0 0 6px var(--lyric-glow),
+      0 0 18px var(--lyric-glow),
+      0 0 44px color-mix(in srgb, var(--lyric-glow) 70%, transparent);
+  }
+  50% {
+    text-shadow:
+      0 0 10px var(--lyric-glow),
+      0 0 30px var(--lyric-glow),
+      0 0 72px var(--lyric-glow);
+  }
+}
+
+/* 列表当前行：卡拉 OK 扫光 + 呼吸发光 + bass 脉冲（--sweep/--bass 由 rAF 驱动） */
+.lyric-list-cur {
+  position: relative;
+  background-image: linear-gradient(
+    100deg,
+    var(--lyric-glow) 0%,
+    #fffdf6 calc(var(--sweep, 0%) - 12%),
+    rgba(255, 255, 255, 0.42) var(--sweep, 0%),
+    rgba(255, 255, 255, 0.42) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  transform: scale(calc(1.05 + var(--bass, 0) * 0.07));
+  transform-origin: left center;
+  animation:
+    lyric-line-in 0.4s cubic-bezier(0.25, 0.8, 0.3, 1) both,
+    lyric-glow-breathe 2.6s ease-in-out 0.4s infinite;
+}
+
+/* 选中行背景微光晕（不参与 background-clip: text，用 ::before 垫在文字下） */
+.lyric-list-cur::before {
+  content: '';
+  position: absolute;
+  inset: -4px -10px;
+  border-radius: 10px;
+  background: radial-gradient(
+    ellipse at 30% 50%,
+    color-mix(in srgb, var(--lyric-glow) 16%, transparent),
+    transparent 70%
+  );
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* 新当前行：短距淡入。刻意不触碰 transform（交由 --bass 脉冲持有） */
+@keyframes lyric-line-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* 当前行逐字弹入：短距上浮，animation-delay 按字索引错峰 */
+.lyric-char {
+  display: inline-block;
+  animation: lyric-char-in 0.45s cubic-bezier(0.25, 0.8, 0.35, 1) both;
+  will-change: transform, filter;
+}
+@keyframes lyric-char-in {
+  0% {
+    transform: translateY(8px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/* 模拟书写揭示：初始透明 + 轻模糊，按行时长/字数（≤80ms/字）依次清晰浮现 */
+.lyric-char-write {
+  animation:
+    lyric-char-in 0.45s cubic-bezier(0.25, 0.8, 0.35, 1) both,
+    lyric-char-write-in 0.32s ease-out both;
+  /* animation-delay 由 React 内联按字索引写入，两个动画层共用同一延迟 */
+}
+@keyframes lyric-char-write-in {
+  0% {
+    opacity: 0;
+    filter: blur(2.5px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0px);
+  }
+}
+
+/* 发光"笔尖"：随书写进度从左到右移动，揭完淡出（animationDuration 由 React 按行写入） */
+.lyric-pen {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 9999px;
+  background: #fffdf6;
+  box-shadow:
+    0 0 6px 2px var(--lyric-glow),
+    0 0 16px 5px color-mix(in srgb, var(--lyric-glow) 65%, transparent);
+  pointer-events: none;
+  animation: lyric-pen-move 1s linear both;
+}
+@keyframes lyric-pen-move {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+/* 离开的当前行：短距柔和淡出（保持清晰，不用模糊） */
+.lyric-list-leaving {
+  animation: lyric-line-out 0.4s cubic-bezier(0.25, 0.8, 0.3, 1) both;
+}
+@keyframes lyric-line-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1.05);
+  }
+  100% {
+    opacity: 0.4;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+/* 非当前行：距离层次只用透明度（下限 0.35）表达，始终清晰、统一左对齐 */
+.lyric-list-item {
+  /* --pre：当前行唱到 70% 后由 rAF 写入下一行，0→1 渐进预亮 */
+  opacity: calc(max(0.35, min(1, 1 - var(--depth, 0) * 0.13 + var(--pre, 0) * 0.4)));
+  line-height: 1.7;
+  text-align: left;
+  transform-origin: left center;
+  text-shadow: 0 0 calc(var(--pre, 0) * 14px)
+    color-mix(in srgb, var(--lyric-glow) calc(var(--pre, 0) * 55%), transparent);
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s cubic-bezier(0.25, 0.8, 0.3, 1);
+  will-change: opacity;
+}
+.lyric-list-item:hover {
+  opacity: 0.9;
+}
+.lyric-list-cur.lyric-list-item {
+  opacity: 1;
+}
+
+/* 纯音乐 / 无歌词：优雅呼吸提示 */
+.lyric-breath {
+  animation: lyric-breath 3.2s ease-in-out infinite;
+}
+@keyframes lyric-breath {
+  0%, 100% {
+    opacity: 0.35;
+    letter-spacing: 0.3em;
+    text-shadow: 0 0 12px color-mix(in srgb, var(--lyric-glow) 40%, transparent);
+  }
+  50% {
+    opacity: 0.85;
+    letter-spacing: 0.42em;
+    text-shadow:
+      0 0 18px var(--lyric-glow),
+      0 0 48px color-mix(in srgb, var(--lyric-glow) 60%, transparent);
+  }
+}
+
+/* ===== 歌词面板：折叠 / 展开 ===== */
+.lyric-panel-wrap {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  z-index: 10;
+  width: min(80vw, 300px);
+  transform: translateY(-50%) translateX(0);
+  opacity: 1;
+  transition:
+    transform 0.38s cubic-bezier(0.32, 0.72, 0.35, 1),
+    opacity 0.3s ease;
+}
+.lyric-panel-wrap.lyric-panel-hidden {
+  transform: translateY(-50%) translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 边缘悬浮开关（玻璃拟态），展开时贴在面板左缘，收起时回到屏幕右缘 */
+.lyric-toggle {
+  position: absolute;
+  top: 50%;
+  right: calc(min(80vw, 300px) + 32px);
+  z-index: 20;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.42);
+  color: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition:
+    right 0.38s cubic-bezier(0.32, 0.72, 0.35, 1),
+    color 0.2s ease,
+    background 0.2s ease;
+}
+.lyric-toggle:hover {
+  color: rgba(255, 253, 246, 0.95);
+  background: rgba(0, 0, 0, 0.62);
+}
+.lyric-toggle.lyric-toggle-closed {
+  right: 12px;
+}
+
+/* 行切换粒子层：覆盖面板并向外留出聚散空间 */
+.lyric-particles {
+  position: absolute;
+  inset: -80px;
+  width: calc(100% + 160px);
+  height: calc(100% + 160px);
+  pointer-events: none;
+  z-index: 20;
+}

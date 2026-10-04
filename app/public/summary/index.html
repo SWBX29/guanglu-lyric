@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>光路·歌词 — 项目总结</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 背景层：光晕 + 漂浮几何碎片 -->
+<div class="bg" aria-hidden="true">
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+  <div class="glow glow-c"></div>
+  <div class="shard s1"></div><div class="shard s2"></div><div class="shard s3"></div>
+  <div class="shard s4"></div><div class="shard s5"></div><div class="shard s6"></div>
+  <div class="shard s7"></div><div class="shard s8"></div>
+</div>
+
+<nav class="topnav glass">
+  <span class="brand"><span class="brand-dot"></span>光路·歌词</span>
+  <div class="nav-links">
+    <a href="#hero">序</a><a href="#stack">技术</a><a href="#core">组成</a><a href="#timeline">历程</a><a href="#notes">花絮</a>
+  </div>
+</nav>
+
+<!-- ============ HERO：发光小人沿光路前行 ============ -->
+<header class="hero" id="hero">
+  <svg class="hero-scene" viewBox="0 0 900 320" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="roadGrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#3a2f26" stop-opacity="0"/>
+        <stop offset=".5" stop-color="#c9a25e" stop-opacity=".9"/>
+        <stop offset="1" stop-color="#3a2f26" stop-opacity="0"/>
+      </linearGradient>
+      <filter id="glowF" x="-80%" y="-80%" width="260%" height="260%">
+        <feGaussianBlur stdDeviation="6" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <!-- low-poly 远山 -->
+    <polygon points="0,250 120,180 260,250" fill="#241e18"/>
+    <polygon points="200,250 360,150 520,250" fill="#2b231b"/>
+    <polygon points="480,250 640,170 800,250" fill="#241e18"/>
+    <polygon points="700,250 830,190 900,250" fill="#2b231b"/>
+    <!-- 透视道路 -->
+    <polygon points="430,250 470,250 560,320 340,320" fill="url(#roadGrad)" opacity=".8"/>
+    <polyline points="450,250 450,320" stroke="#e8c98a" stroke-width="2" stroke-dasharray="8 12" opacity=".6" class="road-dash"/>
+    <!-- 律动音符树 -->
+    <g class="pulse" style="transform-origin:180px 250px"><polygon points="160,250 180,190 200,250" fill="#7a6038"/><rect x="177" y="250" width="6" height="22" fill="#4a3a26"/></g>
+    <g class="pulse p2" style="transform-origin:700px 250px"><polygon points="676,250 700,175 724,250" fill="#8a6d3d"/><rect x="697" y="250" width="6" height="22" fill="#4a3a26"/></g>
+    <g class="pulse p3" style="transform-origin:600px 250px"><polygon points="584,250 600,205 616,250" fill="#6b5433"/><rect x="597" y="250" width="6" height="16" fill="#4a3a26"/></g>
+    <!-- 路灯 -->
+    <g><rect x="318" y="210" width="3" height="62" fill="#4a3a26"/><circle cx="319.5" cy="206" r="5" fill="#f2cf8f" filter="url(#glowF)" class="lamp"/></g>
+    <!-- 发光小人 -->
+    <g id="walker" filter="url(#glowF)">
+      <circle cx="0" cy="-34" r="7" fill="#ffe9bf"/>
+      <line x1="0" y1="-27" x2="0" y2="-8" stroke="#ffd98e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="-9" y1="-18" x2="9" y2="-22" stroke="#ffd98e" stroke-width="3.5" stroke-linecap="round" class="arm a1"/>
+      <line x1="0" y1="-8" x2="-7" y2="6" stroke="#ffd98e" stroke-width="3.5" stroke-linecap="round" class="leg l1"/>
+      <line x1="0" y1="-8" x2="7" y2="6" stroke="#ffd98e" stroke-width="3.5" stroke-linecap="round" class="leg l2"/>
+    </g>
+    <ellipse cx="0" cy="0" rx="10" ry="3" fill="#000" opacity=".35" id="walker-shadow"/>
+  </svg>
+
+  <div class="hero-text">
+    <p class="kicker reveal">项目总结 · 全栈音乐可视化</p>
+    <h1 class="reveal d1">光路<span class="dot-sep">·</span>歌词</h1>
+    <p class="hero-sub reveal d2">把听歌，变成在歌里走路。</p>
+    <p class="hero-desc reveal d3">网易云端搜歌 / 扫码登录后播放歌曲，画面里一个发光小人沿 low-poly 道路前行，路边景物随音乐律动，歌词按真实时间轴逐句高亮同步。</p>
+    <div class="hero-tags reveal d4">
+      <span>音乐可视化</span><span>Low-poly 3D</span><span>LRC 逐句同步</span><span>全栈应用</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ 技术形态 ============ -->
+<section id="stack" class="section">
+  <p class="kicker reveal">技术形态</p>
+  <h2 class="reveal d1">从纯静态站，到全栈动态应用</h2>
+  <div class="stack-grid">
+    <div class="glass card reveal d1">
+      <h3>前端</h3>
+      <ul class="chip-list">
+        <li>React 19</li><li>Vite</li><li>TypeScript</li><li>Three.js</li><li>Tailwind</li><li>shadcn/ui</li>
+      </ul>
+      <p class="card-note">渲染 3D 光路场景、频谱驱动的律动特效与逐句高亮的歌词界面。</p>
+    </div>
+    <div class="glass card reveal d2">
+      <h3>后端</h3>
+      <ul class="chip-list">
+        <li>tRPC</li><li>Hono</li><li>Drizzle</li><li>MySQL</li>
+      </ul>
+      <p class="card-note">承载网易云扫码登录、搜索歌单与流式音频代理，cookie 只存服务端。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 核心组成 ============ -->
+<section id="core" class="section">
+  <p class="kicker reveal">核心组成</p>
+  <h2 class="reveal d1">三大块，撑起一条会唱歌的路</h2>
+  <div class="core-grid">
+    <article class="glass card core-card reveal d1">
+      <div class="core-num">01</div>
+      <h3>3D 场景 · low-poly</h3>
+      <ul>
+        <li>发光小人沿道路持续前行</li>
+        <li>三季节主题：春日清晨 / 秋日夕阳 / 冬夜隆冬</li>
+        <li>Bloom 泛光营造暖光氛围</li>
+        <li>树冠呼吸、粒子、路灯光晕随音乐脉动</li>
+      </ul>
+    </article>
+    <article class="glass card core-card reveal d2">
+      <div class="core-num">02</div>
+      <h3>音频与歌词</h3>
+      <ul>
+        <li>Web Audio 频谱分析驱动场景律动</li>
+        <li>官方 LRC 时间轴精确逐句同步</li>
+        <li>当前行高亮发光、滚动跟随、点击跳转</li>
+        <li>本地音乐 + LRC 备用通道 · 纯音乐提示</li>
+      </ul>
+    </article>
+    <article class="glass card core-card reveal d3">
+      <div class="core-num">03</div>
+      <h3>网易云接入</h3>
+      <ul>
+        <li>扫码登录，cookie 只存服务端</li>
+        <li>云端搜索 / 歌单浏览</li>
+        <li>VIP 歌曲标注并禁播</li>
+        <li>后端流式音频代理，透传 Range，保证频谱分析可用</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<!-- ============ 演进历程 ============ -->
+<section id="timeline" class="section">
+  <p class="kicker reveal">演进历程</p>
+  <h2 class="reveal d1">三轮迭代</h2>
+  <div class="tl">
+    <div class="tl-item reveal">
+      <div class="tl-dot"></div>
+      <div class="glass card">
+        <span class="tl-badge">第 ① 轮 · 初版</span>
+        <h3>体素风起步</h3>
+        <p>体素（voxel）风格场景 + 本地上传音频 + 按节奏「猜」歌词。验证核心创意可行。</p>
+      </div>
+    </div>
+    <div class="tl-item reveal">
+      <div class="tl-dot"></div>
+      <div class="glass card">
+        <span class="tl-badge mono">第 ② 轮 · 修复版 <code>92c0a6e</code></span>
+        <h3>观感与性能修正</h3>
+        <p>曝光修正、Bloom 分级、小人改为匀速前进、pixelRatio 限制 ≤ 1.5，画面更稳更顺。</p>
+      </div>
+    </div>
+    <div class="tl-item reveal">
+      <div class="tl-dot"></div>
+      <div class="glass card">
+        <span class="tl-badge mono">第 ③ 轮 · 本次升级 <code>bb9112b</code></span>
+        <h3>全栈重构</h3>
+        <p>网易云全链路接入、场景 low-poly 重构、LRC 精确逐句同步、全栈后端上线。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 开发花絮 ============ -->
+<section id="notes" class="section">
+  <p class="kicker reveal">开发花絮</p>
+  <h2 class="reveal d1">过程里的故事</h2>
+  <div class="notes-grid">
+    <div class="glass card reveal d1">
+      <h3>多子代理并行开发</h3>
+      <p class="card-note">场景 / 后端 / 前端三条线由多个子代理并行推进，各自 git 分支隔离，最后合并成完整版本。</p>
+    </div>
+    <div class="glass card reveal d2">
+      <h3>沙箱故障 · 四小时</h3>
+      <p class="card-note">中途平台沙箱故障约 4 小时，靠重派健康节点 + 待命恢复扛过，代码零丢失。</p>
+    </div>
+    <div class="glass card reveal d3">
+      <h3>实测验证</h3>
+      <p class="card-note">构建通过；搜索、歌词同步、流式音频代理均经实测验证可用。</p>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="footer-line"></div>
+  <p>光路·歌词 —— 把听歌变成在歌里走路。</p>
+  <p class="footer-mono mono">92c0a6e → bb9112b · React 19 · Three.js · tRPC · Hono</p>
+</footer>
+
+</main>
+<script src="main.js"></script>
+</body>
+</html>

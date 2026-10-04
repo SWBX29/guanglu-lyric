@@ -1,0 +1,18 @@
+# ---- DSH / GraphFlow tooling artifacts (not project source) ----
+.graphflow/
+.graphflow-cache/
+graphflow-out/
+*.sqlite-wal
+*.sqlite-shm
+
+# ---- OS / editor noise ----
+.DS_Store
+Thumbs.db
+*.swp
+desktop.ini
+
+# ---- generic safety nets (app/.gitignore covers the app subtree) ----
+node_modules/
+dist/
+.env
+.env.local
