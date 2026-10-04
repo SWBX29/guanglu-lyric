@@ -236,8 +236,13 @@ export const neteaseRouter = createRouter({
           return { playable: false, reason: "VIP/付费歌曲，暂无播放权限" };
         }
         // API 失败：探测外链是否真能出音频；成功则本 isolate 后续直接走外链
-        if (!(await probeOuterPlayable(id))) {
-          return { playable: false, reason: "该歌曲暂无法播放，可尝试扫码登录后重试" };
+        const probe = await probeOuterPlayable(id);
+        if (!probe.playable) {
+          // TODO(临时诊断 2026-10-04)：定位 CF 出口探测失败原因后收敛为固定话术
+          return {
+            playable: false,
+            reason: `该歌曲暂无法播放，可尝试扫码登录后重试［${probe.detail}］`,
+          };
         }
         markApiFailed(id);
       }

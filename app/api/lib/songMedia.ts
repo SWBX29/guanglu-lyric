@@ -47,8 +47,11 @@ export const OUTER_FETCH_HEADERS: Record<string, string> = {
 /**
  * 轻量探测：外链端点是否真的能出音频。
  * 只取 1 字节 Range 并立即取消响应体；任何异常一律按不可播处理（探测是旁路）。
+ * 失败时返回诊断详情（status/content-type 或异常消息），供调用方与日志定位。
  */
-export async function probeOuterPlayable(id: string): Promise<boolean> {
+export type OuterProbeResult = { playable: true } | { playable: false; detail: string };
+
+export async function probeOuterPlayable(id: string): Promise<OuterProbeResult> {
   try {
     const res = await fetch(outerSongUrl(id), {
       headers: { Range: "bytes=0-0", ...OUTER_FETCH_HEADERS },
@@ -56,13 +59,16 @@ export async function probeOuterPlayable(id: string): Promise<boolean> {
     });
     const type = res.headers.get("content-type") ?? "";
     const ok = (res.ok || res.status === 206) && /audio|octet-stream/.test(type);
+    const detail = `status=${res.status} type=${type || "-"}`;
     await res.body?.cancel();
     if (!ok) {
-      console.warn(`[songMedia] outer probe not audio: id=${id} status=${res.status} type=${type}`);
+      console.warn(`[songMedia] outer probe not audio: id=${id} ${detail}`);
+      return { playable: false, detail };
     }
-    return ok;
+    return { playable: true };
   } catch (err) {
-    console.warn(`[songMedia] outer probe failed: id=${id}`, err instanceof Error ? err.message : String(err));
-    return false;
+    const detail = `error=${err instanceof Error ? err.message : String(err)}`;
+    console.warn(`[songMedia] outer probe failed: id=${id} ${detail}`);
+    return { playable: false, detail };
   }
 }

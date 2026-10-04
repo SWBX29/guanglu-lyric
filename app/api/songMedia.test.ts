@@ -33,29 +33,33 @@ describe('preferOuter 缓存', () => {
 });
 
 describe('probeOuterPlayable', () => {
-  it('音频响应返回 true', async () => {
+  it('音频响应返回 { playable: true }', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(null, { status: 206, headers: { 'content-type': 'audio/mpeg' } })),
     );
-    await expect(probeOuterPlayable(uid())).resolves.toBe(true);
+    await expect(probeOuterPlayable(uid())).resolves.toEqual({ playable: true });
   });
 
-  it('非音频响应返回 false（不把 HTML 当音频）', async () => {
+  it('非音频响应返回不可播并带诊断（不把 HTML 当音频）', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(null, { status: 200, headers: { 'content-type': 'text/html' } })),
     );
-    await expect(probeOuterPlayable(uid())).resolves.toBe(false);
+    const r = await probeOuterPlayable(uid());
+    expect(r.playable).toBe(false);
+    if (!r.playable) expect(r.detail).toContain('status=200');
   });
 
-  it('网络异常返回 false（探测不抛出）', async () => {
+  it('网络异常返回不可播并带诊断（探测不抛出）', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
         throw new Error('network down');
       }),
     );
-    await expect(probeOuterPlayable(uid())).resolves.toBe(false);
+    const r = await probeOuterPlayable(uid());
+    expect(r.playable).toBe(false);
+    if (!r.playable) expect(r.detail).toContain('network down');
   });
 });
