@@ -12,14 +12,14 @@
 | 项目 | 状态 |
 |---|---|
 | **线上地址** | **https://lyric.swbx.cc.cd**（自定义域名，推荐）+ https://guanglu-lyric.1663988203.workers.dev（双入口实测可用） |
-| **当前 Worker 版本** | `54bca6b3-31ee-4b78-b9f5-18ba557bdbbf`（2026-10-04 由 CI 发布）。此后每次 master push 都会由 CI 重新发布，**最新版本以 `wrangler deployments list` 为准** |
+| **当前 Worker 版本** | 2026-10-05 由 CI 随 `e7827af` 发布（V34 窄屏四项加固已上线，部署端到端取证见 §6 V35）。此后每次 master push 都会由 CI 重新发布，**最新版本以 `wrangler deployments list` 为准** |
 | Cloudflare 账号 | `1663988203@qq.com's Account` / account id `c5b214ba182d8c1a2880bff2613c2bb8`（本机 wrangler 已 OAuth 登录） |
 | D1 数据库 | `guanglu-lyric-db` / id `a8f4b230-1181-4d24-9aaf-bc15a55f70d1`；迁移 `0000`（会话表）+ `0001`（audit_events）本地/远端均已应用 |
 | Secrets | `COOKIE_ENC_KEY`、`PROXY_SIGN_KEY`（CF 侧 `wrangler secret`；本地副本 `app/.dev.vars`，已 gitignore） |
 | Cron | `23 4 * * *`（清理过期会话 + 90 天前审计事件） |
 | 仓库 | **https://github.com/SWBX29/guanglu-lyric**（Public，master；**push 即 CI 自动部署**）；本机工作树 clean |
 | 质量门 | `tsc -b` exit 0 ｜ `vitest` **57/57** ｜ `vite build` OK ｜ `wrangler deploy --dry-run` OK ｜ CI verify + deploy 全绿 ｜ `eslint` 26 项均为既有历史问题（无新增） |
-| 当前状态 | 功能完整可用。生产播放走**直连模式**（无频谱）且已完成 CSP/混合内容修复；歌词栏"糊团"已修复；窄屏布局四项加固已完成（V34/D-11，本地静态门全绿）。**待人工验证**：真机扫码登录、真机直连出声、歌词修复真机确认、窄屏布局真机确认、iOS/Safari |
+| 当前状态 | 功能完整可用。生产播放走**直连模式**（无频谱）且已完成 CSP/混合内容修复；歌词栏"糊团"已修复；**窄屏布局四项加固已完成并上线**（V34/V35/D-11，CI 双绿、产物端到端取证）。**待人工验证**：真机扫码登录、真机直连出声、歌词修复真机确认、窄屏布局真机确认、iOS/Safari |
 
 **一句话结论**：原 MySQL/Node 工程已完整迁移到 Cloudflare 免费档（Workers + Static Assets + D1），安全加固、结构化审计、GitHub CI、自定义域名全部落地并实测；生产播放因网易云对云出口风控改为"客户端直连外链"降级方案（代码/网络层已验证，真机出声待确认）。
 
@@ -249,8 +249,10 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 
 | 提交 | 内容 |
 |---|---|
+| `e7827af` | chore：`.gitignore` 忽略 `.workbuddy/`（agent 工作区数据，非源码） |
+| `7ced1c4` | docs：HANDOFF 同步 V34/D-11；标注已过期排查计划并修正 60/60 → 57 |
+| `7fad758` | fix：窄屏布局四项加固 —— D10 开关边距 / E11 天气展开态 / E12 面板高度 / A2 `begin()` Promise 感知（V34、D-11） |
 | `122c689` | docs：交接文档整体重写（旧版删除，章节/陷阱/V 编号保持稳定） |
-| （待提交） | fix：窄屏布局四项加固 —— D10 开关边距 / E11 天气展开态 / E12 面板高度 / A2 `begin()` Promise 感知（V34、D-11） |
 | `39b21e8` | docs：HANDOFF 同步歌词栏糊团修复（V33/陷阱 16） |
 | `a821b9d` | fix：歌词栏当前行糊团修复 —— 去掉 blur、光晕收敛、扫光改 `mask-image` |
 | `e90c782` | docs：HANDOFF 同步系统排查结果（V30–V32、陷阱 15、基线 57/57） |
@@ -279,7 +281,8 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 | V32 | **CSP 修复部署核对** | 线上 `curl -D`（经代理） | ✅ 生产首页已返回新 CSP（media-src 双域名 + UIR + CF 探针放行）；CI verify+deploy 双绿 |
 | V33 | **歌词栏当前行"糊团"修复** | 用户手机截图 4x 放大取证 + 代码层重构（免浏览器） | ✅ 确认为"无字形模糊金斑 + 大光晕"（clip 鬼影 + 2.5px 模糊 + 呼吸光晕叠加）；已改为透明度揭示 + `mask-image` 扫光 + 克制光晕；本地 `check/test/build` 全绿。**真机复验待用户确认** |
 | V34 | **窄屏布局四项加固 + 基线重校**（D10/E11/E12/A2 残留） | 代码层几何推导（免浏览器）+ 全量静态门 | ✅ **基线重校**：`check` 0 ／ `test` **57/57** ／ `lint` **26 项**（含本文件所在提交前后**逐行签名 diff 完全一致**，零新增）／ `build` OK。**改动**：① D10 开关左缘按 `clamp(168,70vw,300)` + `min(w+36,100vw-42)` 复算 —— 320px→28px、280px→16px、375px→45px、≥430px 与原值一致；② E12 面板 568px 可用高 384→421px，≥900px 取原值 72/112px（零回归）；③ E11 展开态 chips 加 `max-h+overflow-y-auto` 使底边受钳；④ A2 `begin()` 感知 `play()` Promise 并加 `playError` 兜底提示位。**真机复验待确认**（`clamp/min/dvh` 在 jsdom 无布局引擎，无法由 vitest 证实） |
-| 质量门 | `check` / `test` / `build` / CI | 最近一次：2026-10-05（V34 后） | ✅ tsc 0；**57/57**；lint 26 项无新增；build OK |
+| V35 | **V34 上线核对（push → CI → 部署产物端到端取证）** | `gh run watch` + 线上 `curl`（经代理） | ✅ push `122c689..e7827af` → CI run `37291388553` **verify + deploy 双绿**（deploy 32s）；线上首页 `index-eLLBho46.css` 与本地构建产物**文件名完全一致**，且线上 CSS 内含本轮新增 `--lyric-panel-w` / `clamp(168px` / `100vw - 42px` → **新代码确已上线**；线上 `/api/health` → `{"ok":true,"storage":true,"key":true}`。备注：**陷阱 13 的集成 token 本次未用到**（提交未触碰 `.github/workflows/`，keyring token 即足够） |
+| 质量门 | `check` / `test` / `build` / CI | 最近一次：2026-10-05（V35 后） | ✅ tsc 0；**57/57**；lint 26 项无新增；build OK；CI verify+deploy 双绿 |
 
 ---
 
@@ -324,7 +327,7 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 | **真人扫码登录** | 接口层已验证（801/802/803、错误分支、D1 读写、加解密），但**没人用手机真扫过**。扫码成功后可在 D1 `audit_events` 核对新增 `login_success` 行（审计最后一块拼图） |
 | **真机直连出声** | 直连模式代码/网络层已验证（V31/V32）；手机打开线上 → 搜一首有外链的歌（如「稻香(深情版)」）→ 应显示「直连播放（当前网络下无频谱）」且有声、进度走字。无外链歌曲提示失败属预期 |
 | **歌词修复真机确认** | V33 已按截图重构，待手机复看（当前行应为清晰暖白发光字 + 逐字淡入 + 小光点笔尖） |
-| **窄屏布局加固真机确认（V34）** | D10 开关边距 / E12 面板高度 / E11 展开态 chips 均为几何推导修复，`clamp/min/dvh` 无法由 vitest 证实；需在 320×568、280px、横屏 320×375 与 iOS Safari 上目视复看 |
+| **窄屏布局加固真机确认（V34/V35）** | D10 开关边距 / E12 面板高度 / E11 展开态 chips 均为几何推导修复，`clamp/min/dvh` 无法由 vitest 证实；**代码已于 2026-10-05 随 `e7827af` 上线**，需在 320×568、280px、横屏 320×375 与 iOS Safari 上目视复看 |
 | **iOS/Safari 兼容** | AudioContext 手势要求、`upgrade-insecure-requests` 对 302 的升级行为、Range 行为均未实机测 |
 | **G5 CPU 持续观察** | 峰值 102–123 ms 高于名义 10 ms 未被拒；若出现 `1102`，瘦身顺序：① songUrl/lyric 加平台缓存 ② 二维码前端渲染 ③ weapi 链路去 zod |
 | **墙内可达性** | workers.dev 直连被黑洞（经代理可达）；自定义域名可达性受 CF 边缘 IP 干扰影响，属尽力而为 |
