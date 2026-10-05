@@ -78,8 +78,9 @@ export class VoxelWorld {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
-  composer: EffectComposer;
-  bloom: UnrealBloomPass;
+  /** 由 buildComposer() 赋值（构造函数与 setQuality 共用），故用 ! 断言 */
+  composer!: EffectComposer;
+  bloom!: UnrealBloomPass;
   /** 当前画质档位（构造时按设备探测，可由 setQuality 覆盖） */
   quality: QualityLevel = 'medium';
   /** 接触阴影层（角色/道具根部的低成本假阴影），low 档隐藏 */
@@ -269,19 +270,39 @@ export class VoxelWorld {
     this.buildIcicles();
 
     // 后处理链：RenderPass → UnrealBloom → OutputPass（sRGB 输出 + tone mapping 落地）。
-    // MSAA 必须建在 composer 的内部 RenderTarget 上（renderer 的 antialias 对 composer 无效）。
+    this.buildComposer();
+    // 初始档位的装饰密度也要生效（默认 1.0 时无变化，低档位才会裁剪）
+    this.applyDecorDensity();
+    this.resize();
+  }
+
+  /**
+   * 构建后处理链。构造函数与 setQuality() 共用，避免两处实现漂移。
+   *
+   * 性能要点（实测教训）：本机 16 核/16GB 但配 Radeon 520（2016 入门独显），
+   * 原实现无条件开 HalfFloat + samples=4，fill 开销约为无 MSAA 的 4~5 倍 → 严重掉帧。
+   * 现在按档位严格分级：
+   * - MSAA 仅在档位要求时开启（low 关闭 / medium 2x / high 4x）
+   * - HalfFloat HDR 仅在 high 开启（每像素带宽翻倍，对入门卡不可接受）
+   * - bloom 内部 RT 分辨率按档位缩放（半分辨率省约 75% 填充）
+   */
+  private buildComposer(): void {
+    if (this.composer) this.composer.dispose();
+
     const qs = QUALITY_SETTINGS[this.quality];
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const rt = new THREE.WebGLRenderTarget(size.x, size.y, {
-      type: THREE.HalfFloatType,
+      type: qs.hdrHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType,
       samples: qs.msaaSamples,
     });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    // bloom 的实际分辨率由 applyBloomResolution() 在 resize() 末尾按档位设定
+    // （UnrealBloomPass.setSize 会覆盖构造参数，故此处传 1×1 占位即可）
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.78);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
-    this.resize();
   }
 
   // ---------- builders ----------
@@ -295,8 +316,20 @@ export class VoxelWorld {
       depthWrite: false,
       uniforms: this.skyUniforms,
       vertexShader: `varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+      // 天空占据画面最大面积，必须与标准材质走同一条色彩管线：
+      // 先 tonemapping（ACES）再 linear→sRGB，否则天空会明显比地面「亮一档」且发灰。
+      //
+      // 注意：**不要**再手写 #include <colorspace_pars_fragment> / <tonemapping_pars_fragment>。
+      // ShaderMaterial 的 fragment 前缀里 three 已经注入过这些 *_pars_* 函数，
+      // 重复 include 会导致着色器编译失败（实测报 "function already has a body"）。
+      // 这里只需要在 gl_FragColor 赋值之后调用 *_fragment 段。
       fragmentShader: `uniform vec3 top; uniform vec3 bottom; varying vec3 vP;
-        void main(){ float h=normalize(vP).y*0.5+0.5; gl_FragColor=vec4(mix(bottom,top,smoothstep(0.28,0.75,h)),1.0);}`,
+        void main(){
+          float h=normalize(vP).y*0.5+0.5;
+          gl_FragColor=vec4(mix(bottom,top,smoothstep(0.28,0.75,h)),1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
     });
     this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(220, 24, 16), mat);
     this.scene.add(this.skyDome);
@@ -1258,6 +1291,7 @@ export class VoxelWorld {
       fragmentShader: `
         uniform float uT; uniform float uDist; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uFoam;
         uniform vec3 uFogColor; uniform float uFogDensity;
+        // 同上：pars 由 three 自动注入，此处只需在输出后调用 fragment 段
         varying vec2 vUv; varying float vFogDepth;
         void main(){
           // vUv.x: 0 = shore side, 1 = horizon; vUv.y runs along the path
@@ -1274,6 +1308,9 @@ export class VoxelWorld {
           float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vFogDepth * vFogDepth);
           col = mix(col, uFogColor, clamp(fogFactor, 0.0, 1.0));
           gl_FragColor = vec4(col, 1.0);
+          // 海面同样占据大面积，需与标准材质一致的 tonemapping + sRGB 输出
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
     });
     this.sea = new THREE.Mesh(new THREE.PlaneGeometry(150, 420, 1, 1), seaMat);
@@ -1417,30 +1454,53 @@ export class VoxelWorld {
   // ---------- quality ----------
   /**
    * 运行时切换画质档位。新增方法，不改既有签名。
-   * 会重建 composer 的 RenderTarget（MSAA samples 只在建 RT 时生效）。
+   * 会重建 composer（MSAA samples / RT 类型只能在建 RT 时生效）。
    */
   setQuality(level: QualityLevel) {
     if (level === this.quality) return;
     this.quality = level;
     const qs = QUALITY_SETTINGS[level];
 
-    // MSAA 变化必须重建 composer 的 RT
-    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-    const rt = new THREE.WebGLRenderTarget(size.x, size.y, {
-      type: THREE.HalfFloatType,
-      samples: qs.msaaSamples,
-    });
-    this.composer = new EffectComposer(this.renderer, rt);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
+    // 与构造函数共用同一实现；重建后 bloom 是全新实例，需重设参数
+    this.buildComposer();
+    if (this.theme) {
+      this.bloom.strength = this.theme.bloom;
+      this.bloom.radius = this.theme.bloomRadius * qs.bloomRadiusScale;
+    }
     this.resize();
 
     if (this.contactShadows) this.contactShadows.visible = qs.contactShadows;
+
+    // 装饰密度变化需重建相关实例系统
+    this.applyDecorDensity();
   }
 
   getQuality(): QualityLevel {
     return this.quality;
+  }
+
+  /**
+   * 按当前档位调整装饰密度。decorDensity 的真正消费者。
+   *
+   * 这些装饰都是 THREE.Points + BufferGeometry，所以用 setDrawRange 控制
+   * 实际绘制的顶点子集即可——不重建几何、不重新分配显存，切换档位零卡顿。
+   * 萤火虫/风痕的顶点顺序是随机的，截断不会产生可见的聚集感。
+   */
+  private applyDecorDensity() {
+    const d = QUALITY_SETTINGS[this.quality].decorDensity;
+    const limit = (pts: THREE.Points | undefined | null) => {
+      if (!pts) return;
+      const attr = pts.geometry.getAttribute('position');
+      if (!attr) return;
+      pts.geometry.setDrawRange(0, Math.max(1, Math.floor(attr.count * d)));
+    };
+    limit(this.fireflies);
+    limit(this.streaks);
+    // 蝴蝶是可交互的 Group，逐个开关（数量少，开销可忽略）
+    const shown = Math.max(1, Math.round(this.butterflies.length * Math.min(1, d)));
+    this.butterflies.forEach((g, i) => {
+      g.visible = i < shown;
+    });
   }
 
   /** recompute intensity targets from the effective weather mode */
@@ -2389,6 +2449,26 @@ export class VoxelWorld {
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.applyBloomResolution();
+  }
+
+  /**
+   * 按档位设置 bloom 内部 RT 分辨率。
+   *
+   * 必须放在 composer.setSize() **之后**调用：UnrealBloomPass.setSize(w,h) 会
+   * 无条件按传入尺寸重新分配全部 mip 链，完全忽略构造函数给的 resolution，
+   * 因此「半分辨率 bloom」在 setSize 之前设置是没有意义的（会被覆盖）。
+   * 这里传入「绘制缓冲尺寸 × 倍率」，让 setSize 再按其内部规则减半。
+   */
+  private applyBloomResolution() {
+    if (!this.bloom) return;
+    const qs = QUALITY_SETTINGS[this.quality];
+    if (qs.bloomResolutionScale >= 1) return; // 全分辨率时无需干预
+    const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.bloom.setSize(
+      Math.max(1, Math.floor(buf.x * qs.bloomResolutionScale)),
+      Math.max(1, Math.floor(buf.y * qs.bloomResolutionScale)),
+    );
   }
 
   dispose() {
