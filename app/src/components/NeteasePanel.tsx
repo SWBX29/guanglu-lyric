@@ -90,11 +90,11 @@ function QrLogin() {
   return (
     <div className="flex flex-col items-center gap-3 py-4">
       {qr.isLoading ? (
-        <div className="flex h-44 w-44 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+        <div className="flex h-36 w-36 items-center justify-center rounded-xl border border-white/10 bg-white/5 min-[375px]:h-44 min-[375px]:w-44">
           <Loader2 className="h-6 w-6 animate-spin text-white/50" />
         </div>
       ) : qr.isError || !qr.data ? (
-        <div className="flex h-44 w-44 flex-col items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5">
+        <div className="flex h-36 w-36 flex-col items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 min-[375px]:h-44 min-[375px]:w-44">
           <p className="text-xs text-white/50">二维码加载失败</p>
           <Button
             size="sm"
@@ -110,7 +110,7 @@ function QrLogin() {
           <img
             src={qr.data.qrDataUrl}
             alt="网易云登录二维码"
-            className={`h-44 w-44 rounded-xl border border-white/10 bg-white p-2 transition ${
+            className={`h-36 w-36 rounded-xl border border-white/10 bg-white p-2 transition min-[375px]:h-44 min-[375px]:w-44 ${
               status === 'expired' ? 'opacity-30 grayscale' : ''
             }`}
           />

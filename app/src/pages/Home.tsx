@@ -360,6 +360,8 @@ export default function Home() {
     const engine = engineRef.current!;
     const lyricSource = lrcText ?? (lyricDraft.trim() ? lyricDraft : null);
     let lines: LyricLine[] = [];
+    // 被自动播放策略拦截时置 false：不再无条件 setPlaying(true)，否则 UI 与真实播放脱节
+    let playOk = true;
     setCurrentSong(null);
     setPlayError(null);
     if (audioFile) {
@@ -372,7 +374,12 @@ export default function Home() {
         // 纯文本歌词：没有时间轴，均匀分布兜底
         lines = plainToLyrics(lyricSource, engine.getDuration());
       }
-      engine.play();
+      // 感知 play() 的 Promise（原来 fire-and-forget，拦截时静默失败）
+      try {
+        await engine.play();
+      } catch {
+        playOk = false;
+      }
       setPureMusic(lines.length === 0);
     } else {
       engine.startDemo();
@@ -384,8 +391,10 @@ export default function Home() {
     setLyrics(lines);
     setCurrentLine(-1);
     setPrevLine(-1);
+    // 必须在 try 之外：即便 play() 被拦截，开始浮层也要正常关闭，不阻塞 UI 反馈
     setStarted(true);
-    setPlaying(true);
+    if (playOk) setPlaying(true);
+    else setPlayError('播放被浏览器拦截，请再点一次播放按钮');
   }, [audioFile, lrcText, lyricDraft]);
 
   const togglePlay = () => {
@@ -527,9 +536,14 @@ export default function Home() {
         </button>
       </div>
 
-      {/* 网易云面板 */}
+      {/* 网易云面板：上下边距随视口高度自适应。
+          高屏（≥900px）取原值 72/112px（零回归）；矮屏（如 320×568）收紧到 56/91px，
+          把多出的空间让给内部滚动列表（原固定值 384px 可用高，扣 QR 176px 后列表仅剩 ~96px）。 */}
       {panelOpen && (
-        <div className="absolute bottom-28 left-5 top-[4.5rem] z-20 w-[min(92vw,340px)]">
+        <div
+          className="absolute left-5 z-20 w-[min(92vw,340px)]"
+          style={{ top: 'max(3.5rem, min(4.5rem, 8dvh))', bottom: 'max(5rem, min(7rem, 16dvh))' }}
+        >
           <NeteasePanel activeSongId={currentSong?.id} onPlay={playNetease} />
         </div>
       )}
@@ -674,6 +688,14 @@ export default function Home() {
             </div>
           )}
 
+          {/* 本地文件路径下 currentSong 为空（begin 开始时置 null），播放信息卡片不渲染；
+              这里给 playError 一个兜底显示位，否则「播放被拦截」提示设了却看不见 */}
+          {playError && !currentSong && (
+            <div className="pointer-events-none absolute bottom-24 left-1/2 z-10 -translate-x-1/2 text-center">
+              <div className="text-xs text-red-300/90">{playError}</div>
+            </div>
+          )}
+
           {/* 主题切换 + 天气菜单：并排一行（整簇高度不向下延伸，避免与右侧居中的歌词面板重叠） */}
           <div className="absolute right-5 top-5 z-20 flex items-start gap-2">
             {/* 天气二级菜单：默认收起为单个按钮，点开选择后自动收起 */}
@@ -700,7 +722,9 @@ export default function Home() {
                 })()}
               </button>
               {weatherOpen && (
-                <div className="absolute right-0 top-[calc(100%+6px)] z-30 flex max-w-[min(88vw,300px)] flex-wrap justify-end gap-1.5 rounded-2xl border border-white/10 bg-black/60 p-2 shadow-xl backdrop-blur">
+                // max-h + overflow-y-auto：极矮视口（如横屏 320×375）下把 chips 底边钳住并内部滚动，
+                // 避免向下弹出时侵入右侧居中的歌词面板顶部；正常视口 8 个 chip 约 110px，几乎不触发。
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 flex max-h-[min(60vh,14rem)] max-w-[min(88vw,300px)] flex-wrap justify-end gap-1.5 overflow-y-auto rounded-2xl border border-white/10 bg-black/85 p-2 shadow-2xl backdrop-blur [scrollbar-width:none]">
                   {WEATHER_OPTIONS.map(({ mode, label, Icon }) => (
                     <button
                       key={mode}
