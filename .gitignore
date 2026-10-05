@@ -5,6 +5,9 @@ graphflow-out/
 *.sqlite-wal
 *.sqlite-shm
 
+# ---- agent workspace data (memory logs, plans; not project source) ----
+.workbuddy/
+
 # ---- OS / editor noise ----
 .DS_Store
 Thumbs.db
