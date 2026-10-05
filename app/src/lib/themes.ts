@@ -37,7 +37,10 @@ export interface ThemePreset {
   particlePalette: string[];
   particleCount: number; // fireflies / snow / petals ambience
   particleKind: 'petal' | 'leaf' | 'snow';
-  bloom: number; // base bloom strength per theme
+  /** base bloom strength per theme（已按 ACES tone mapping 重校，见 WP2a） */
+  bloom: number;
+  /** bloom radius（0..1）；高档位会再乘一个倍率 */
+  bloomRadius: number;
   // --- scene dressing (added for rich-nature pass) ---
   mountains: [string, string, string]; // 3 ridge layers, near → far (pre-shaded silhouettes)
   celestialColor: string; // sun / sunset disc / moon face
@@ -84,7 +87,8 @@ export const THEMES: ThemePreset[] = [
     particlePalette: ['#ffc7da', '#ffffff', '#f6b8c8', '#ffe9a8'],
     particleCount: 260,
     particleKind: 'petal',
-    bloom: 0.3,
+    bloom: 0.24,
+    bloomRadius: 0.45,
     mountains: ['#54746d', '#6b8a82', '#86a29a'],
     celestialColor: '#fff3c8',
     celestialGlow: '#ffe9a8',
@@ -128,7 +132,8 @@ export const THEMES: ThemePreset[] = [
     particlePalette: ['#f2c063', '#e8963f', '#d97b3f', '#f7d98a', '#ffd76e'],
     particleCount: 180,
     particleKind: 'leaf',
-    bloom: 0.45,
+    bloom: 0.34,
+    bloomRadius: 0.52,
     mountains: ['#4e3448', '#61445a', '#77566c'],
     celestialColor: '#ff8a45',
     celestialGlow: '#ff9a55',
@@ -172,7 +177,8 @@ export const THEMES: ThemePreset[] = [
     particlePalette: ['#ffffff', '#dfeaff', '#bcd7ff'],
     particleCount: 320,
     particleKind: 'snow',
-    bloom: 0.55,
+    bloom: 0.42,
+    bloomRadius: 0.55,
     mountains: ['#141d36', '#1a2542', '#223052'],
     celestialColor: '#e8f1ff',
     celestialGlow: '#a8c4ff',
@@ -216,7 +222,8 @@ export const THEMES: ThemePreset[] = [
     particlePalette: ['#ffffff', '#dfeaff', '#bcd7ff'],
     particleCount: 200,
     particleKind: 'snow',
-    bloom: 0.6,
+    bloom: 0.46,
+    bloomRadius: 0.58,
     mountains: ['#10142a', '#161b36', '#1d2342'],
     celestialColor: '#e8f1ff',
     celestialGlow: '#a8c4ff',
@@ -260,7 +267,8 @@ export const THEMES: ThemePreset[] = [
     particlePalette: ['#ffffff', '#fff4dc', '#ffe9a8'],
     particleCount: 160,
     particleKind: 'petal',
-    bloom: 0.25,
+    bloom: 0.2,
+    bloomRadius: 0.42,
     mountains: ['#5a8ab0', '#6f9ec2', '#88b4d4'],
     celestialColor: '#fff6d8',
     celestialGlow: '#ffedb0',

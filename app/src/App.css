@@ -1,3 +1,8 @@
+/* ⚠️ 死文件，全项目零引用（Vite 模板残留）。
+   切勿 import 本文件：下方的 `#root { max-width:1280px; padding: 2rem }`
+   会限制全屏布局，破坏本项目「fixed inset-0 全屏 3D」的根容器约定。
+   保留原因：约定不删除仓库中的既有文件（2026-10-05）。 */
+
 #root {
   max-width: 1280px;
   margin: 0 auto;

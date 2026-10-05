@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { ThemePreset, WeatherMode } from '../lib/themes';
+import { resolveQuality, QUALITY_SETTINGS, loadQualityChoice, type QualityLevel } from '../lib/quality';
 
 export type { WeatherMode } from '../lib/themes';
 
@@ -34,6 +36,8 @@ const PETAL_N = 520;
 const LEAF_N = 420;
 const SNOW_N = 1300;
 const RAIN_N = 1000;
+/** wind weather streak count */
+const STREAK_N = 260;
 // city props
 const BUILD_N = 34;
 const NEON_N = 16;
@@ -43,6 +47,8 @@ const PALM_N = 16;
 const UMBRELLA_N = 7;
 const SHELL_N = 26;
 const ICICLE_N = LAMP_N; // winter icicles hanging from lamp arms
+/** 接触阴影实例数：0 = 角色，其余为近处路灯锚点 */
+const CONTACT_SHADOW_N = 1 + LAMP_N;
 const MTN_W = 360; // width of one ridge tile
 const MTN_K = [0.055, 0.035, 0.02]; // parallax rate per layer
 const MTN_Z = [-64, -92, -122]; // depth behind the walker per layer
@@ -74,6 +80,12 @@ export class VoxelWorld {
   camera: THREE.PerspectiveCamera;
   composer: EffectComposer;
   bloom: UnrealBloomPass;
+  /** 当前画质档位（构造时按设备探测，可由 setQuality 覆盖） */
+  quality: QualityLevel = 'medium';
+  /** 接触阴影层（角色/道具根部的低成本假阴影），low 档隐藏 */
+  private contactShadows: THREE.InstancedMesh | null = null;
+  /** project() 复用实例（避免每帧分配） */
+  private projectV = new THREE.Vector3();
 
   private ambient: THREE.AmbientLight;
   private sun: THREE.DirectionalLight;
@@ -118,15 +130,17 @@ export class VoxelWorld {
   private leaves!: THREE.Points;
   private snow!: THREE.Points;
   private rain!: THREE.Points;
+  private streaks!: THREE.Points; // wind-only horizontal streak system
   private petalU: any;
   private leafU: any;
   private snowU: any;
   private rainU: any;
+  private streakU!: ReturnType<VoxelWorld['makeFallSystem']>['uniforms'];
   // weather state machine
   private weatherMode: WeatherMode = 'auto';
   private effWeather: Exclude<WeatherMode, 'auto'> = 'petals';
-  private wI = { petals: 0, leaves: 0, snow: 0, rain: 0, wind: 0 }; // smoothed intensities
-  private wT = { petals: 0, leaves: 0, snow: 0, rain: 0, wind: 0 }; // targets
+  private wI = { petals: 0, leaves: 0, snow: 0, rain: 0, wind: 0, streaks: 0 }; // smoothed intensities
+  private wT = { petals: 0, leaves: 0, snow: 0, rain: 0, wind: 0, streaks: 0 }; // targets
   // city props
   private buildings!: THREE.InstancedMesh;
   private buildSeed = new Float32Array(BUILD_N * 3);
@@ -163,6 +177,7 @@ export class VoxelWorld {
   // distant ridge silhouettes: 3 layers × 2 wrap tiles
   private mountains: THREE.Mesh[] = [];
   private mountainMats: THREE.MeshBasicMaterial[] = [];
+  private mountainRidgeMats: THREE.MeshBasicMaterial[] = [];
   // celestial body (sun glow / sunset disc / moon) + halo
   private celestial!: THREE.Group;
   private celestialDisc!: THREE.Mesh;
@@ -198,8 +213,14 @@ export class VoxelWorld {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    // 画质档位必须在建 composer 之前确定（决定 MSAA samples）
+    this.quality = resolveQuality(loadQualityChoice());
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    // ACES 色调映射：与 OutputPass 配合，把线性 HDR 结果映射到 sRGB 显示空间。
+    // 修复前（无 toneMapping / 无 OutputPass）composer 路径不做 sRGB 输出转换 → 画面偏暗偏灰。
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 400);
     this.camera.position.set(0, 5.0, 8.6);
     this.camera.lookAt(0, 1.4, -8);
@@ -216,6 +237,7 @@ export class VoxelWorld {
     this.buildVegetation();
     this.buildLamps();
     this.buildCharacter();
+    this.buildContactShadows();
     this.buildClouds();
     this.buildFireflies();
     this.buildCelestial();
@@ -246,10 +268,19 @@ export class VoxelWorld {
     this.buildBeach();
     this.buildIcicles();
 
-    this.composer = new EffectComposer(this.renderer);
+    // 后处理链：RenderPass → UnrealBloom → OutputPass（sRGB 输出 + tone mapping 落地）。
+    // MSAA 必须建在 composer 的内部 RenderTarget 上（renderer 的 antialias 对 composer 无效）。
+    const qs = QUALITY_SETTINGS[this.quality];
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const rt = new THREE.WebGLRenderTarget(size.x, size.y, {
+      type: THREE.HalfFloatType,
+      samples: qs.msaaSamples,
+    });
+    this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.72);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.78);
     this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
     this.resize();
   }
 
@@ -309,6 +340,38 @@ export class VoxelWorld {
         m.position.set(-tile * MTN_W, -0.4, MTN_Z[l]);
         m.userData.layer = l;
         m.userData.tile = tile;
+        this.scene.add(m);
+        this.mountains.push(m);
+      }
+    }
+    // 亮面描边：与剪影同形，略微上移/放大，用更亮的同色系压出「山脊受光」层次。
+    // 用顶点着色无法做渐变，这里靠同形叠色 + polygonOffset 实现低成本分层。
+    for (let l = 0; l < 3; l++) {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, -3);
+      const peaks = 14;
+      let x = 0;
+      for (let p = 0; p < peaks; p++) {
+        const w = (MTN_W / peaks) * (0.75 + hash(l * 31 + p * 7.7) * 0.5);
+        const h = layerH[l] * (0.45 + hash(l * 13.3 + p * 3.1) * 0.9);
+        // 山脊线内收：只保留峰顶以上的一小段，模拟被光照亮的棱线
+        shape.lineTo(x + w * 0.5, h);
+        shape.lineTo(x + w * 0.5, h - layerH[l] * 0.12);
+        x += w;
+      }
+      const geo = new THREE.ShapeGeometry(shape);
+      const mat = new THREE.MeshBasicMaterial({
+        color: '#ffffff',
+        fog: true,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.06,
+        depthWrite: false,
+      });
+      this.mountainRidgeMats.push(mat);
+      for (let tile = 0; tile < 2; tile++) {
+        const m = new THREE.Mesh(geo, mat);
+        m.position.set(-tile * MTN_W, -0.4, MTN_Z[l] + 0.5);
         this.scene.add(m);
         this.mountains.push(m);
       }
@@ -916,6 +979,36 @@ export class VoxelWorld {
     this.scene.add(this.fireflies);
   }
 
+  /**
+   * 接触阴影（低成本假阴影）：一片朝上的软边贴片，跟随角色脚下。
+   * 不用 shadowMap —— 零额外 draw call 成本，仅 1 个 InstancedMesh。
+   * 由 setQuality 按档位显隐（low 档关闭）。
+   */
+  private buildContactShadows() {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      map: makeGlowTexture(),
+      color: '#000000',
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, CONTACT_SHADOW_N);
+    mesh.frustumCulled = false;
+    for (let i = 0; i < CONTACT_SHADOW_N; i++) {
+      dummy.position.set(0, -10, 0);
+      dummy.scale.setScalar(0);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.visible = QUALITY_SETTINGS[this.quality].contactShadows;
+    this.contactShadows = mesh;
+    this.scene.add(mesh);
+  }
+
   private buildCharacter() {
     const coreMat = new THREE.MeshStandardMaterial({
       color: '#fff6e2',
@@ -1074,6 +1167,16 @@ export class VoxelWorld {
     this.rainU.uSway.value = 0.15;
     this.rainU.uSlant.value = 0.35;
     this.rainU.uOpacity.value = 0.5;
+    // 风痕：横向掠过的高速细痕，专门服务 'wind' 天气（原先 wind 只有落叶 0.22 + 摇摆，视觉表达很弱）
+    const st = this.makeFallSystem(STREAK_N, 'streak');
+    this.streaks = st.pts;
+    this.streakU = st.uniforms;
+    this.streakU.uFall.value = 0.35; // 缓慢下落，主要靠横向风
+    this.streakU.uSize.value = 0.42;
+    this.streakU.uSway.value = 0.5;
+    this.streakU.uSpin.value = 0.0;
+    this.streakU.uSlant.value = 0.85; // 大斜角 → 横向风痕
+    this.streakU.uOpacity.value = 0.42;
   }
 
   /** city: low-poly building blocks with baked emissive lit-window texture */
@@ -1139,13 +1242,23 @@ export class VoxelWorld {
       uDeep: { value: new THREE.Color('#1a6aa8') },
       uShallow: { value: new THREE.Color('#4fc8d8') },
       uFoam: { value: new THREE.Color('#f4feff') },
+      uFogColor: { value: new THREE.Color('#a8d8e0') },
+      uFogDensity: { value: 0.014 },
     };
     const seaMat = new THREE.ShaderMaterial({
       uniforms: this.seaU,
-      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      vertexShader: `
+        varying vec2 vUv; varying float vFogDepth;
+        void main(){
+          vUv = uv;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vFogDepth = -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }`,
       fragmentShader: `
         uniform float uT; uniform float uDist; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uFoam;
-        varying vec2 vUv;
+        uniform vec3 uFogColor; uniform float uFogDensity;
+        varying vec2 vUv; varying float vFogDepth;
         void main(){
           // vUv.x: 0 = shore side, 1 = horizon; vUv.y runs along the path
           vec3 col = mix(uShallow, uDeep, smoothstep(0.05, 0.6, vUv.x));
@@ -1157,6 +1270,9 @@ export class VoxelWorld {
           col = mix(col, uFoam, clamp(foam * 0.8 + shore, 0.0, 1.0));
           // sun sparkle
           col += 0.08 * sin(vUv.y * 300.0 + uT * 2.0) * sin(vUv.x * 220.0 - uT * 1.4);
+          // FogExp2 —— 与 scene.fog 同参数，避免远端海面与雾色地面/山剪影衔接生硬
+          float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vFogDepth * vFogDepth);
+          col = mix(col, uFogColor, clamp(fogFactor, 0.0, 1.0));
           gl_FragColor = vec4(col, 1.0);
         }`,
     });
@@ -1298,6 +1414,35 @@ export class VoxelWorld {
     return this.mapKind;
   }
 
+  // ---------- quality ----------
+  /**
+   * 运行时切换画质档位。新增方法，不改既有签名。
+   * 会重建 composer 的 RenderTarget（MSAA samples 只在建 RT 时生效）。
+   */
+  setQuality(level: QualityLevel) {
+    if (level === this.quality) return;
+    this.quality = level;
+    const qs = QUALITY_SETTINGS[level];
+
+    // MSAA 变化必须重建 composer 的 RT
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const rt = new THREE.WebGLRenderTarget(size.x, size.y, {
+      type: THREE.HalfFloatType,
+      samples: qs.msaaSamples,
+    });
+    this.composer = new EffectComposer(this.renderer, rt);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+    this.resize();
+
+    if (this.contactShadows) this.contactShadows.visible = qs.contactShadows;
+  }
+
+  getQuality(): QualityLevel {
+    return this.quality;
+  }
+
   /** recompute intensity targets from the effective weather mode */
   private applyWeatherTargets() {
     const w = this.weatherMode === 'auto' ? this.theme?.defaultWeather || 'clear' : this.weatherMode;
@@ -1308,12 +1453,17 @@ export class VoxelWorld {
     T.snow = w === 'snow' ? 0.55 : w === 'snowstorm' ? 1 : 0;
     T.rain = w === 'rain' ? 0.9 : 0;
     T.wind = w === 'wind' ? 1 : w === 'snowstorm' ? 0.7 : w === 'leaves' ? 0.35 : w === 'rain' ? 0.3 : 0;
+    // 风痕：仅 wind 天气显式出现（snowstorm 时由雪本体承担视觉，不叠加避免过乱）
+    T.streaks = w === 'wind' ? 0.85 : 0;
   }
 
   // ---------- theme ----------
   setTheme(theme: ThemePreset) {
     this.theme = theme;
     this.scene.fog = new THREE.FogExp2(theme.fog, theme.fogDensity);
+    // 海面为自定义 shader，需手动同步雾参数（scene.fog 对其无效）
+    this.seaU?.uFogColor.value.set(theme.fog);
+    if (this.seaU) this.seaU.uFogDensity.value = theme.fogDensity;
     (this.ground.material as THREE.MeshStandardMaterial).color.set(theme.ground);
     this.skyUniforms.top.value.set(theme.skyTop);
     this.skyUniforms.bottom.value.set(theme.skyBottom);
@@ -1323,6 +1473,7 @@ export class VoxelWorld {
     this.sun.intensity = theme.sunIntensity;
     this.sun.position.set(...theme.sunPosition);
     this.bloom.strength = theme.bloom;
+    this.bloom.radius = theme.bloomRadius * QUALITY_SETTINGS[this.quality].bloomRadiusScale;
     this.charLight.color.set(theme.characterHalo);
     this.charHalo.material.color.set(theme.characterHalo);
     (this.charCore.material as THREE.MeshStandardMaterial).emissive.set(theme.characterCore);
@@ -1339,11 +1490,18 @@ export class VoxelWorld {
       this.cloudMats[i].color.set(night ? '#2c3a5e' : '#f5f2ea');
       this.cloudMats[i].opacity = night ? base * 0.55 : base;
     }
-    this.fireflyUniforms.uColor.value.set(theme.defaultWeather === 'leaves' ? '#ffcf7a' : '#ffe9a8');
+    // 萤火虫颜色改由主题 particleColor 决定（见下方粒子调色板段）；此处只处理透明度
     this.fireflyUniforms.uOpacity.value = night ? 0.9 : theme.defaultWeather === 'leaves' ? 0.75 : 0.45;
 
     // mountains — silhouette layers tinted per theme
     for (let l = 0; l < 3; l++) this.mountainMats[l].color.set(theme.mountains[l]);
+    // 山脊亮线：夜晚主题更亮（月光/雪光更明显），白天收敛
+    for (let l = 0; l < 3; l++) {
+      const rm = this.mountainRidgeMats[l];
+      if (!rm) continue;
+      rm.color.set(night ? '#ffffff' : theme.mountains[l]).lerp(new THREE.Color('#ffffff'), night ? 0.6 : 0.35);
+      rm.opacity = night ? 0.1 : 0.05;
+    }
 
     // celestial body: spring sun glow / autumn sunset disc / winter moon
     (this.celestialDisc.material as THREE.MeshBasicMaterial).color.set(theme.celestialColor);
@@ -1386,6 +1544,15 @@ export class VoxelWorld {
       (this.snowCaps.material as THREE.MeshStandardMaterial).color.set(theme.snowCap);
     }
 
+    // 主题粒子调色板 → 接通到萤火虫与风痕（原先 particleColor/particlePalette 是死字段）
+    this.fireflyUniforms.uColor.value.set(theme.particleColor);
+    if (this.streakU) {
+      const pp = theme.particlePalette;
+      this.streakU.uColA.value.set(pp[0] ?? theme.particleColor);
+      this.streakU.uColB.value.set(pp[1 % pp.length] ?? theme.particleColor);
+      this.streakU.uColC.value.set(pp[2 % pp.length] ?? theme.particleColor);
+    }
+
     // puddles reflect the sky, tinted per theme
     this.puddleMat.color.set(theme.skyBottom).multiplyScalar(0.35);
     this.puddleMat.emissive.set(theme.lampGlow).multiplyScalar(0.05);
@@ -1398,7 +1565,7 @@ export class VoxelWorld {
       l.glow.material.color.set(theme.lampGlow);
       l.glowOuter.material.color.set(theme.lampGlow);
       l.spot.material.color.set(theme.lampGlow);
-      ((l.cone.material as THREE.ShaderMaterial).uniforms.color.value as THREE.Color).set(theme.lampGlow);
+      ((l.cone.material as THREE.ShaderMaterial).uniforms.color.value as THREE.Color).set(theme.coneColor);
     }
 
     // GPU particle palettes (petals from the theme's flower palette, leaves/snow fixed-ish)
@@ -1445,6 +1612,7 @@ export class VoxelWorld {
       this.wI.snow = this.wT.snow;
       this.wI.rain = this.wT.rain;
       this.wI.wind = this.wT.wind;
+      this.wI.streaks = this.wT.streaks;
     }
 
     // static instance colors
@@ -1575,6 +1743,7 @@ export class VoxelWorld {
     wI.snow += (wT.snow - wI.snow) * wLerp;
     wI.rain += (wT.rain - wI.rain) * wLerp;
     wI.wind += (wT.wind - wI.wind) * wLerp;
+    wI.streaks += (wT.streaks - wI.streaks) * wLerp;
     // gust envelope rides on top of the wind mode &&  (pure f(t), continuous)
     const gustEnv = Math.pow(Math.max(0, Math.sin(t * 0.42) * 0.65 + Math.sin(t * 0.17 + 1.3) * 0.5 - 0.15), 1.6);
     const gust = wI.wind * (0.35 + gustEnv) * (0.6 + bands.mid * 0.9);
@@ -1604,10 +1773,17 @@ export class VoxelWorld {
     this.rainU.uDist.value = this.distance;
     this.rainU.uWind.value = gust;
     this.rainU.uIntensity.value = wI.rain;
+    // 风痕：横向快扫，强度由 wI.streaks 平滑驱动
+    this.streakU.uT.value = t;
+    this.streakU.uDist.value = this.distance;
+    this.streakU.uWind.value = gust;
+    this.streakU.uBoost.value = 1.2 + bands.level * 0.8;
+    this.streakU.uIntensity.value = wI.streaks;
     this.petals.visible = wI.petals > 0.01;
     this.leaves.visible = wI.leaves > 0.01;
     this.snow.visible = snowActive;
     this.rain.visible = wI.rain > 0.01;
+    this.streaks.visible = wI.streaks > 0.01;
 
     const charZ = -this.distance;
 
@@ -2157,6 +2333,17 @@ export class VoxelWorld {
     const hs = 1.4 + pulse * 0.45 + Math.sin(t * 2.2) * 0.06;
     this.charHalo.scale.set(hs, hs, 1);
 
+    // contact shadow — one soft ellipse under the walker, breathing with the halo
+    if (this.contactShadows && this.contactShadows.visible) {
+      const cs = 1.5 + pulse * 0.25;
+      dummy.position.set(sx, 0.02, charZ);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(cs, 1, cs * 0.8);
+      dummy.updateMatrix();
+      this.contactShadows.setMatrixAt(0, dummy.matrix);
+      this.contactShadows.instanceMatrix.needsUpdate = true;
+    }
+
     // breath mist — a soft puff every few seconds, drifting forward as it dissolves
     // (winter-night auto default; also active whenever snow weather is selected)
     for (const b of this.breaths) b.visible = snowActive;
@@ -2177,7 +2364,7 @@ export class VoxelWorld {
     this.camera.position.z += (charZ + 8.6 - this.camera.position.z) * Math.min(1, dt * 3);
     this.camera.lookAt(sx * 0.5, 1.3, charZ - 8);
 
-    this.bloom.strength = theme.bloom + pulse * 0.2;
+    this.bloom.strength = theme.bloom + pulse * 0.16 + bands.level * 0.05;
     this.composer.render();
   }
 
@@ -2186,7 +2373,8 @@ export class VoxelWorld {
   }
 
   project(x: number, y: number, z: number): { x: number; y: number; visible: boolean } {
-    const v = new THREE.Vector3(x, y, z).project(this.camera);
+    // 复用实例：Home 每帧对每行可见歌词调用，避免稳态逐帧分配
+    const v = this.projectV.set(x, y, z).project(this.camera);
     return {
       x: (v.x * 0.5 + 0.5) * this.canvas.clientWidth,
       y: (-v.y * 0.5 + 0.5) * this.canvas.clientHeight,
@@ -2204,6 +2392,15 @@ export class VoxelWorld {
   }
 
   dispose() {
+    // 释放几何 / 材质 / composer，避免 HMR 与重新挂载时泄漏 GPU 资源
+    this.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const mat = (mesh as unknown as { material?: THREE.Material | THREE.Material[] }).material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else if (mat) mat.dispose();
+    });
+    this.composer?.dispose();
     this.renderer.dispose();
   }
 }

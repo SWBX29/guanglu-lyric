@@ -3,12 +3,13 @@ import { VoxelWorld } from '../scene/VoxelWorld';
 import { AudioEngine } from '../audio/AudioEngine';
 import { parseLRC, plainToLyrics, type LyricLine } from '../lib/lrc';
 import { THEMES } from '../lib/themes';
+import { QUALITY_LABELS, loadQualityChoice, resolveQuality, saveQualityChoice, type QualityChoice } from '../lib/quality';
 import { trpc } from '@/providers/trpc';
 import type { NeteaseSong } from '../../contracts/types';
 import { NeteasePanel } from '@/components/NeteasePanel';
 import { LyricParticles, type ParticleTargets } from '@/components/LyricParticles';
 import { Button } from '@/components/ui/button';
-import { Play, Pause, Music, FileText, Sparkles, Upload, Loader2, Music2, X, PanelRightClose, PanelRightOpen, CloudSun, Sun, Flower2, CloudRain, Leaf, Wind, Snowflake, CloudSnow } from 'lucide-react';
+import { Play, Pause, Music, FileText, Sparkles, Upload, Loader2, Music2, X, PanelRightClose, PanelRightOpen, CloudSun, Sun, Flower2, CloudRain, Leaf, Wind, Snowflake, CloudSnow, Gauge, Volume2, VolumeX } from 'lucide-react';
 
 /** 歌词 UI 提前量（秒）：高亮/滚动/卡拉OK扫光提前点亮，歌词时间轴与 seek 不变 */
 const LOOKAHEAD = 0.4;
@@ -26,8 +27,97 @@ const WEATHER_OPTIONS = [
 ] as const;
 type WeatherMode = (typeof WEATHER_OPTIONS)[number]['mode'];
 
-const SAMPLE_LYRICS = `[00:02]沿着微光铺成的小路
-[00:08]一步一步走向清晨的雾
+/**
+ * 通用右上角下拉控件：触发按钮 + chips 二级菜单。
+ * 支持点击外部 / Esc 关闭（原先天气菜单只能再点按钮或选中才收起）。
+ */
+function ControlMenu<T extends string>({
+  value,
+  options,
+  onSelect,
+  triggerIcon,
+  triggerTitle,
+  align = 'right',
+}: {
+  value: T;
+  options: readonly { value: T; label: string; Icon?: React.ComponentType<{ className?: string }> }[];
+  onSelect: (v: T) => void;
+  triggerIcon: React.ReactNode;
+  triggerTitle: string;
+  align?: 'left' | 'right';
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent | TouchEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('touchstart', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('touchstart', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title={triggerTitle}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm backdrop-blur transition ${
+          open
+            ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
+            : 'border-white/10 bg-black/40 text-white/55 hover:text-white/85'
+        }`}
+      >
+        {triggerIcon}
+        {current.label}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className={`absolute top-[calc(100%+6px)] z-30 flex max-h-[min(60vh,16rem)] max-w-[min(88vw,320px)] flex-wrap gap-1.5 overflow-y-auto rounded-2xl border border-white/10 bg-black/85 p-2 shadow-2xl backdrop-blur [scrollbar-width:none] ${
+            align === 'right' ? 'right-0 justify-end' : 'left-0'
+          }`}
+        >
+          {options.map(({ value: v, label, Icon }) => (
+            <button
+              key={v}
+              role="menuitemradio"
+              aria-checked={value === v}
+              onClick={() => {
+                onSelect(v);
+                setOpen(false);
+              }}
+              title={label}
+              className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs backdrop-blur transition ${
+                value === v
+                  ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
+                  : 'border-white/10 bg-white/5 text-white/55 hover:text-white/85'
+              }`}
+            >
+              {Icon && <Icon className="h-3.5 w-3.5" />}
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SAMPLE_LYRICS = `[00:02]沿着微光铺成的小路[00:08]一步一步走向清晨的雾
 [00:14]像素的花开在脚边
 [00:20]风把星光吹成了碎片
 [00:26]世界安静得像一幅画
@@ -64,10 +154,46 @@ export default function Home() {
   const [prevLine, setPrevLine] = useState(-1);
   const [lyricsOpen, setLyricsOpen] = useState(true);
   const [weather, setWeather] = useState<WeatherMode>('auto');
-  const [weatherOpen, setWeatherOpen] = useState(false);
+  const [qualityChoice, setQualityChoice] = useState<QualityChoice>(() => loadQualityChoice());
+  const [volume, setVolume] = useState(0.8);
+  const [muted, setMuted] = useState(false);
   const listContainerRef = useRef<HTMLDivElement>(null);
   const lastSweepElRef = useRef<HTMLDivElement | null>(null);
   const lastPreElRef = useRef<HTMLDivElement | null>(null);
+  const seekBarRef = useRef<HTMLDivElement>(null);
+  const seekingRef = useRef(false);
+
+  /** 通过指针位置求 seek 目标时间并写入 AudioEngine */
+  const seekFromClientX = useCallback((clientX: number) => {
+    const bar = seekBarRef.current;
+    const engine = engineRef.current;
+    if (!bar || !engine) return;
+    const dur = engine.getDuration();
+    if (!(dur > 0)) return;
+    const rect = bar.getBoundingClientRect();
+    const k = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    engine.seek(k * dur);
+    setProgress(k);
+  }, []);
+
+  const onSeekDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      seekingRef.current = true;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      seekFromClientX(e.clientX);
+    },
+    [seekFromClientX],
+  );
+  const onSeekMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (seekingRef.current) seekFromClientX(e.clientX);
+    },
+    [seekFromClientX],
+  );
+  const onSeekUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    seekingRef.current = false;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  }, []);
 
   // 网易云状态
   const [panelOpen, setPanelOpen] = useState(false);
@@ -98,17 +224,43 @@ export default function Home() {
 
     let raf = 0;
     let last = performance.now();
+    // 直连降级（spectrum:false）时 AnalyserNode 不接入，getBands 恒 0 → 场景完全静止。
+    // 这里用播放时间驱动一套低频模拟节拍兜底，仅在「在播但频谱全 0」时生效。
+    let simT = 0;
+    let simBass = 0;
+    let simMid = 0;
+    let simTreble = 0;
     const loop = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const bands = engine.getBands();
+      let bands = engine.getBands();
       const isPlaying = engine.isPlaying();
+      const flat = bands.bass === 0 && bands.mid === 0 && bands.treble === 0;
+      if (isPlaying && flat) {
+        // 以 84 BPM 的节拍为骨架 + 缓慢起伏的音色包络
+        simT += dt;
+        const beat = 60 / 84;
+        const phase = (simT % beat) / beat;
+        const kick = Math.pow(1 - phase, 3); // 每拍一个衰减脉冲
+        const swell = 0.5 + 0.5 * Math.sin(simT * 0.35);
+        const melody = 0.4 + 0.35 * Math.sin(simT * 1.1 + Math.sin(simT * 0.23) * 2);
+        simBass += (kick * 0.55 + swell * 0.25 - simBass) * Math.min(1, dt * 8);
+        simMid += (melody * 0.5 + kick * 0.2 - simMid) * Math.min(1, dt * 5);
+        simTreble += (0.25 + 0.25 * Math.sin(simT * 1.7) - simTreble) * Math.min(1, dt * 4);
+        bands = { bass: simBass, mid: simMid, treble: simTreble, level: (simBass + simMid + simTreble) / 3 };
+      } else if (flat) {
+        // 未播放时让模拟量回落，避免恢复播放瞬间跳变
+        simBass += (0 - simBass) * Math.min(1, dt * 3);
+        simMid += (0 - simMid) * Math.min(1, dt * 3);
+        simTreble += (0 - simTreble) * Math.min(1, dt * 3);
+        bands = { bass: simBass, mid: simMid, treble: simTreble, level: (simBass + simMid + simTreble) / 3 };
+      }
       world.update(dt, isPlaying, bands);
 
       // lyrics placement —— 按 audio.currentTime 精确同步
       const t = engine.getTime();
       const dur = engine.getDuration();
-      if (dur > 0) {
+      if (dur > 0 && !seekingRef.current) {
         const p = t / dur;
         setProgress((prev) => (Math.abs(prev - p) > 0.003 ? p : prev));
       }
@@ -212,6 +364,17 @@ export default function Home() {
   useEffect(() => {
     worldRef.current?.setWeather(weather);
   }, [weather]);
+
+  // 画质切换：写入 VoxelWorld（重建 composer RT）并持久化用户选择
+  useEffect(() => {
+    worldRef.current?.setQuality(resolveQuality(qualityChoice));
+    saveQualityChoice(qualityChoice);
+  }, [qualityChoice]);
+
+  // 音量：AudioEngine 统一入口（三态：频谱代理 / 直连 / 内置 demo）
+  useEffect(() => {
+    engineRef.current?.setVolume(muted ? 0 : volume);
+  }, [volume, muted]);
 
   // 当前歌词行变化 → 列表平滑滚动跟随
   // 注意：不能用 scrollIntoView —— 它会滚动所有可滚动祖先；面板收起/动画中
@@ -426,7 +589,11 @@ export default function Home() {
 
   return (
     <div className="fixed inset-0 overflow-clip bg-black select-none">
-      <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" />
+      <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" aria-hidden="true" />
+      {/* 3D 场景为纯装饰层：为不支持 WebGL / 屏幕阅读器提供可读降级说明 */}
+      <span className="sr-only">
+        背景为随音乐律动的像素 3D 场景（需要 WebGL 支持）。若未显示，不影响音乐播放与歌词功能。
+      </span>
 
       {/* 3D flying lyrics layer（currentTime 精确同步） */}
       {started &&
@@ -494,14 +661,16 @@ export default function Home() {
               ref={audioNameRef}
               type="file"
               accept="audio/*"
-              className="absolute h-px w-px overflow-hidden opacity-0"
+              aria-label="选择本地音乐文件"
+              className="sr-only"
               onChange={(e) => setAudioFile(e.target.files?.[0] ?? null)}
             />
             <input
               ref={lrcNameRef}
               type="file"
               accept=".lrc,.txt"
-              className="absolute h-px w-px overflow-hidden opacity-0"
+              aria-label="选择 LRC 歌词文件"
+              className="sr-only"
               onChange={async (e) => {
                 const f = e.target.files?.[0];
                 if (f) setLrcText(await f.text());
@@ -587,8 +756,52 @@ export default function Home() {
             >
               {playing ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
             </button>
-            <div className="h-1 w-40 overflow-hidden rounded-full bg-white/10">
-              <div className="h-full rounded-full bg-amber-200/80" style={{ width: `${progress * 100}%` }} />
+            {/* 进度条：可点击/拖拽 seek（原为纯展示） */}
+            <div
+              ref={seekBarRef}
+              role="slider"
+              tabIndex={0}
+              aria-label="播放进度"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress * 100)}
+              onPointerDown={onSeekDown}
+              onPointerMove={onSeekMove}
+              onPointerUp={onSeekUp}
+              className="group relative flex h-6 w-40 cursor-pointer items-center"
+            >
+              <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-amber-200/80" style={{ width: `${progress * 100}%` }} />
+              </div>
+              <div
+                className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-amber-100 opacity-0 shadow transition group-hover:opacity-100"
+                style={{ left: `calc(${progress * 100}% - 6px)` }}
+              />
+            </div>
+            {/* 音量：点击图标静音，拖动滑杆调节（三态统一走 AudioEngine.setVolume） */}
+            <div className="group flex items-center gap-1.5">
+              <button
+                onClick={() => setMuted((m) => !m)}
+                title={muted ? '取消静音' : '静音'}
+                aria-pressed={muted}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-white/60 transition hover:text-white"
+              >
+                {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={muted ? 0 : volume}
+                aria-label="音量"
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setVolume(v);
+                  if (v > 0) setMuted(false);
+                }}
+                className="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/15 accent-amber-200"
+              />
             </div>
           </div>
 
@@ -674,10 +887,21 @@ export default function Home() {
             </>
           )}
 
-          {/* 纯音乐 / 无歌词：呼吸提示 */}
+          {/* 纯音乐 / 无歌词：呼吸提示 + 音符飘散 */}
           {pureMusic && lyrics.length === 0 && !busy && (
             <div className="pointer-events-none absolute bottom-24 left-1/2 z-10 -translate-x-1/2 text-center">
-              <div className="lyric-breath font-serif-sc text-lg text-amber-50/80">纯 音 乐 · 请 欣 赏</div>
+              <div className="relative inline-block">
+                <div className="lyric-breath font-serif-sc text-lg text-amber-50/80">纯 音 乐 · 请 欣 赏</div>
+                <span className="lyric-drift-note" style={{ left: '12%', animationDelay: '0s' }}>
+                  ♪
+                </span>
+                <span className="lyric-drift-note" style={{ left: '48%', animationDelay: '1.6s' }}>
+                  ♫
+                </span>
+                <span className="lyric-drift-note" style={{ left: '82%', animationDelay: '3.2s' }}>
+                  ♪
+                </span>
+              </div>
             </div>
           )}
 
@@ -696,62 +920,37 @@ export default function Home() {
             </div>
           )}
 
-          {/* 主题切换 + 天气菜单：并排一行（整簇高度不向下延伸，避免与右侧居中的歌词面板重叠） */}
+          {/* 主题切换 + 天气菜单 + 画质菜单：并排一行（整簇高度不向下延伸，避免与右侧居中的歌词面板重叠） */}
           <div className="absolute right-5 top-5 z-20 flex items-start gap-2">
-            {/* 天气二级菜单：默认收起为单个按钮，点开选择后自动收起 */}
-            <div className="relative">
-              <button
-                onClick={() => setWeatherOpen((v) => !v)}
-                title="选择天气"
-                aria-expanded={weatherOpen}
-                className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm backdrop-blur transition ${
-                  weatherOpen
-                    ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
-                    : 'border-white/10 bg-black/40 text-white/55 hover:text-white/85'
-                }`}
-              >
-                {(() => {
-                  const cur = WEATHER_OPTIONS.find((o) => o.mode === weather) ?? WEATHER_OPTIONS[0];
-                  const CurIcon = cur.Icon;
-                  return (
-                    <>
-                      <CurIcon className="h-3.5 w-3.5" />
-                      {cur.label}
-                    </>
-                  );
-                })()}
-              </button>
-              {weatherOpen && (
-                // max-h + overflow-y-auto：极矮视口（如横屏 320×375）下把 chips 底边钳住并内部滚动，
-                // 避免向下弹出时侵入右侧居中的歌词面板顶部；正常视口 8 个 chip 约 110px，几乎不触发。
-                <div className="absolute right-0 top-[calc(100%+6px)] z-30 flex max-h-[min(60vh,14rem)] max-w-[min(88vw,300px)] flex-wrap justify-end gap-1.5 overflow-y-auto rounded-2xl border border-white/10 bg-black/85 p-2 shadow-2xl backdrop-blur [scrollbar-width:none]">
-                  {WEATHER_OPTIONS.map(({ mode, label, Icon }) => (
-                    <button
-                      key={mode}
-                      onClick={() => {
-                        setWeather(mode);
-                        setWeatherOpen(false);
-                      }}
-                      title={label}
-                      className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs backdrop-blur transition ${
-                        weather === mode
-                          ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'
-                          : 'border-white/10 bg-white/5 text-white/55 hover:text-white/85'
-                      }`}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <ControlMenu
+              value={qualityChoice}
+              options={QUALITY_LABELS.map((o) => ({
+                value: o.value,
+                label: o.label,
+                Icon: Gauge as React.ComponentType<{ className?: string }>,
+              }))}
+              onSelect={setQualityChoice}
+              triggerTitle="画质档位（按设备自动 / 手动覆盖）"
+              triggerIcon={<Gauge className="h-3.5 w-3.5" />}
+            />
+            <ControlMenu
+              value={weather}
+              options={WEATHER_OPTIONS.map((o) => ({ value: o.mode, label: o.label, Icon: o.Icon }))}
+              onSelect={setWeather}
+              triggerTitle="选择天气"
+              triggerIcon={(() => {
+                const cur = WEATHER_OPTIONS.find((o) => o.mode === weather) ?? WEATHER_OPTIONS[0];
+                const CurIcon = cur.Icon;
+                return <CurIcon className="h-3.5 w-3.5" />;
+              })()}
+            />
 
             <div className="flex flex-col items-end gap-2">
               {THEMES.map((th, i) => (
                 <button
                   key={th.id}
                   onClick={() => setThemeIdx(i)}
+                  aria-pressed={i === themeIdx}
                   className={`rounded-full border px-4 py-1.5 font-serif-sc text-sm tracking-wider backdrop-blur transition ${
                     i === themeIdx
                       ? 'border-amber-200/60 bg-amber-100/15 text-amber-100'

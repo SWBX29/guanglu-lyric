@@ -11,6 +11,19 @@ export class AudioEngine {
   isDemo = false;
   demoDuration = 96;
   private demoOffset = 0;
+  /** 0..1 用户音量（三态统一：频谱代理 / 直连 / 内置 demo） */
+  private volume = 0.8;
+
+  /** 设置音量（0..1）。同时作用于 <audio>.volume 与 demo GainNode。 */
+  setVolume(v: number) {
+    this.volume = Math.min(1, Math.max(0, v));
+    if (this.el) this.el.volume = this.volume;
+    if (this.demoGain) this.demoGain.gain.value = 0.32 * this.volume;
+  }
+
+  getVolume(): number {
+    return this.volume;
+  }
 
   private ensureCtx() {
     if (!this.ctx) {
@@ -31,6 +44,7 @@ export class AudioEngine {
     const url = URL.createObjectURL(file);
     this.el = new Audio(url);
     this.el.crossOrigin = 'anonymous';
+    this.el.volume = this.volume;
     this.source = this.ctx!.createMediaElementSource(this.el);
     this.source.connect(this.analyser!);
     await new Promise<void>((res, rej) => {
@@ -54,6 +68,7 @@ export class AudioEngine {
     const el = new Audio();
     if (spectrum) el.crossOrigin = 'anonymous';
     el.src = url;
+    el.volume = this.volume;
     this.el = el;
     if (spectrum) {
       this.source = this.ctx!.createMediaElementSource(el);
@@ -73,7 +88,7 @@ export class AudioEngine {
     this.isDemo = true;
     const ctx = this.ctx!;
     this.demoGain = ctx.createGain();
-    this.demoGain.gain.value = 0.32;
+    this.demoGain.gain.value = 0.32 * this.volume;
     this.demoGain.connect(this.analyser!);
     this.demoStartAt = ctx.currentTime + 0.1;
     this.demoOffset = 0;

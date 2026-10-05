@@ -33,6 +33,14 @@
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* 歌词面板宽度：窄屏更早收缩，保证面板与其悬浮开关都不顶到/溢出左屏边。
+       上限 300px 与旧 min(80vw,300px) 相同（≥430px 视口表现完全一致），
+       下限 168px 防止极端窄屏面板过窄不可读。
+       ★ 必须在 :root 定义（而非 .dark）：本项目 <html> 从不加 dark class，
+         放在 .dark 里会让 .lyric-panel-wrap 的 width 与 .lyric-toggle 的 right
+         双双回退为无效值（2026-10-05 修复）。 */
+    --lyric-panel-w: clamp(168px, 70vw, 300px);
   }
 
   .dark {
@@ -63,11 +71,6 @@
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
-
-    /* 歌词面板宽度：窄屏更早收缩，保证面板与其悬浮开关都不顶到/溢出左屏边。
-       上限 300px 与旧 min(80vw,300px) 相同（≥430px 视口表现完全一致），
-       下限 168px 防止极端窄屏面板过窄不可读。 */
-    --lyric-panel-w: clamp(168px, 70vw, 300px);
   }
 }
 
@@ -221,20 +224,46 @@
   );
 }
 
+/* 扫光拖尾高光：在已唱/未唱的边界处铺一小段渐变暖光，让揭示边缘更"有笔触感"。
+   纯渐变叠加（不用 filter / 不用 clip:text），与既有 mask 方案同坐标系，移动端安全 */
+.lyric-write-wrap::after {
+  content: '';
+  position: absolute;
+  top: -0.15em;
+  bottom: -0.15em;
+  left: calc(var(--sweep, 0%) - 4.5em);
+  width: 4.5em;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--lyric-glow) 22%, transparent) 78%,
+    color-mix(in srgb, var(--lyric-glow) 38%, transparent)
+  );
+  mix-blend-mode: screen;
+  z-index: -1;
+}
+
 /* 发光"笔尖"：随书写进度从左到右移动，揭完淡出（animationDuration 由 React 按行写入）。
-   被扫光 mask 轻微压暗，故基底略提亮补偿 */
+   被扫光 mask 轻微压暗，故基底略提亮补偿。
+   2026-10-05：改为横向羽化椭圆（原先纯圆点在高字号下偏"硬"），并叠一圈更大的柔光 */
 .lyric-pen {
   position: absolute;
   top: 50%;
   left: 0;
-  width: 5px;
+  width: 7px;
   height: 5px;
   margin-top: -2.5px;
   border-radius: 9999px;
-  background: #fffdf6;
+  background: radial-gradient(
+    ellipse at center,
+    #fffdf6 0%,
+    color-mix(in srgb, var(--lyric-glow) 90%, #fff) 45%,
+    transparent 100%
+  );
   box-shadow:
     0 0 5px 2px var(--lyric-glow),
-    0 0 14px 5px color-mix(in srgb, var(--lyric-glow) 55%, transparent);
+    0 0 16px 6px color-mix(in srgb, var(--lyric-glow) 50%, transparent);
   pointer-events: none;
   animation: lyric-pen-move 1s linear both;
 }
@@ -295,7 +324,7 @@
     0 0 18px color-mix(in srgb, var(--lyric-glow) 28%, transparent);
 }
 
-/* 纯音乐 / 无歌词：优雅呼吸提示 */
+/* 纯音乐 / 无歌词：优雅呼吸提示 + 缓慢上浮的音符光点 */
 .lyric-breath {
   animation: lyric-breath 3.2s ease-in-out infinite;
 }
@@ -311,6 +340,31 @@
     text-shadow:
       0 0 18px var(--lyric-glow),
       0 0 48px color-mix(in srgb, var(--lyric-glow) 60%, transparent);
+  }
+}
+
+/* 三枚错峰飘散的音符光点（纯装饰，pointer-events: none） */
+.lyric-drift-note {
+  position: absolute;
+  bottom: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--lyric-glow) 75%, #fff);
+  text-shadow: 0 0 10px var(--lyric-glow);
+  opacity: 0;
+  animation: lyric-drift 4.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes lyric-drift {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.8) rotate(-6deg);
+  }
+  18% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-46px) scale(1.15) rotate(10deg);
   }
 }
 
