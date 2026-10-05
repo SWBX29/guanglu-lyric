@@ -15,15 +15,15 @@ const ROAD_SEGS = 110; // segments along
 const ROAD_W = 3 * 2 * 1.2 + 2.4; // road + curb strips
 const ROAD_LEN = ROAD_SEGS * ROW_D;
 const SPAN = ROAD_LEN; // recycling span shared by roadside props
-const GRASS_N = 420;
-const REED_N = 90; // tall grass-spike variant
-const FLOWER_N = 130; // split across 3 head shapes (i % 3)
+const GRASS_N = 760;
+const REED_N = 160; // tall grass-spike variant
+const FLOWER_N = 210; // split across 3 head shapes (i % 3)
 const TREE_N = 40;
 const TREE_SPAN = 260;
-const ROCK_N = 70;
-const BUSH_N = 50;
-const MUSH_N = 36;
-const STUMP_N = 22;
+const ROCK_N = 104;
+const BUSH_N = 74;
+const MUSH_N = 52;
+const STUMP_N = 30;
 const PUDDLE_N = 16;
 const LAMP_N = 8;
 const LAMP_H = 3.6;
@@ -90,6 +90,7 @@ export class VoxelWorld {
 
   private ambient: THREE.AmbientLight;
   private sun: THREE.DirectionalLight;
+  private hemi: THREE.HemisphereLight;
   private charLight: THREE.PointLight;
   private character = new THREE.Group();
   private charCore!: THREE.Mesh;
@@ -108,6 +109,11 @@ export class VoxelWorld {
     uZebra: { value: 0 }, // city: zebra-crossing stripes
     uRoadCols: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color(), new THREE.Color()] },
     uCurbCols: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color()] },
+    // 路灯在地面的光池：每盏灯的 (x, z, 强度)，由 update() 每帧写入
+    uLampX: { value: new Float32Array(LAMP_N) },
+    uLampZ: { value: new Float32Array(LAMP_N) },
+    uLampI: { value: new Float32Array(LAMP_N) },
+    uLampCol: { value: new THREE.Color('#ffc98a') },
   };
   private grass!: THREE.InstancedMesh;
   private reeds!: THREE.InstancedMesh;
@@ -221,16 +227,20 @@ export class VoxelWorld {
     // ACES 色调映射：与 OutputPass 配合，把线性 HDR 结果映射到 sRGB 显示空间。
     // 修复前（无 toneMapping / 无 OutputPass）composer 路径不做 sRGB 输出转换 → 画面偏暗偏灰。
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.0; // 实际值由主题 exposure 决定（见 setTheme）
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 400);
     this.camera.position.set(0, 5.0, 8.6);
     this.camera.lookAt(0, 1.4, -8);
 
-    this.ambient = new THREE.AmbientLight('#ffffff', 0.8);
-    this.sun = new THREE.DirectionalLight('#ffd9a0', 1.5);
-    this.charLight = new THREE.PointLight('#ffd98a', 10, 20, 1.8);
+    this.ambient = new THREE.AmbientLight('#ffffff', 0.42);
+    this.sun = new THREE.DirectionalLight('#ffd9a0', 1.15);
+    this.sun.position.set(6, 12, 5);
+    // 半球补光：天空色打顶、地面色反底。让两侧植被/岩石脱离「纯黑剪影」，
+    // 同时保留明暗梯度（AmbientLight 做这件事会把画面压平）。
+    this.hemi = new THREE.HemisphereLight('#bcd7ff', '#3a4a3e', 0.55);
+    this.charLight = new THREE.PointLight('#ffd98a', 2.4, 13, 2.0);
     this.charLight.position.set(0, 1.6, 0);
-    this.scene.add(this.ambient, this.sun, this.charLight);
+    this.scene.add(this.ambient, this.sun, this.hemi, this.charLight);
 
     this.buildSky();
     this.buildMountains();
@@ -561,6 +571,8 @@ export class VoxelWorld {
         `uniform float uPulse; uniform float uCharZ; uniform float uT; uniform float uSnow;
          uniform float uMoss; uniform float uLeaf; uniform float uZebra;
          uniform vec3 uRoadCols[4]; uniform vec3 uCurbCols[3];
+         uniform float uLampX[${LAMP_N}]; uniform float uLampZ[${LAMP_N}];
+         uniform float uLampI[${LAMP_N}]; uniform vec3 uLampCol;
          float frhash(float n){ return fract(sin(n*127.1+311.7)*43758.5453); }
          varying float vWZ; varying float vWX; varying float vCurb; varying float vJit;\n` +
         shader.fragmentShader.replace(
@@ -606,7 +618,27 @@ export class VoxelWorld {
              // gentle light breathing + bass glow around the walker
              float breathe = 0.96 + 0.05 * sin(uT * 0.8 + row * 0.7);
              float nearGlow = uPulse * 0.22 * exp(-abs(vWZ - uCharZ) * 0.12);
-             diffuseColor.rgb = col * breathe + nearGlow;
+             // 涟漪：从角色脚下向外扩散的同心环（3 环错相位），随节拍增亮。
+             // 用 -vWZ（前进轴）与 vWX 的径向距离，环带用 sin 相位差做软边。
+             float dChar = length(vec2(vWX * 0.85, (vWZ - uCharZ) * 0.5));
+             float ripple = 0.0;
+             for (int k = 0; k < 3; k++) {
+               float ph = uT * 1.15 - float(k) * 0.72;
+               float ring = sin(dChar * 1.35 - ph * 6.2831);
+               // 软环：只保留波峰附近，且随半径衰减
+               ripple += smoothstep(0.55, 1.0, ring) * exp(-dChar * 0.28);
+             }
+             float rippleAmt = ripple * (0.05 + uPulse * 0.14);
+             // 路灯光池：逐盏累加椭圆软光斑（世界坐标距离），让路面真正「被灯照到」。
+             // 只有近处几盏对当前片元有贡献，衰减很快所以在 shader 里全遍历 8 盏也很便宜。
+             float lampAcc = 0.0;
+             for (int li = 0; li < ${LAMP_N}; li++) {
+               vec2 d = vec2((vWX - uLampX[li]) * 0.62, (vWZ - uLampZ[li]) * 0.95);
+               float r2 = dot(d, d);
+               lampAcc += uLampI[li] / (1.0 + r2 * 0.9);
+             }
+             vec3 lampWash = uLampCol * lampAcc * 0.16;
+             diffuseColor.rgb = col * breathe + nearGlow + rippleAmt * vec3(0.55, 0.72, 1.0) + lampWash;
            }`
         );
     };
@@ -996,7 +1028,7 @@ export class VoxelWorld {
           p.z += sin(uT * 0.23 + phase * 2.3) * 1.2;
           vTw = 0.35 + 0.65 * (0.5 + 0.5 * sin(uT * 2.2 + phase * 3.0));
           vec4 mv = modelViewMatrix * vec4(p, 1.0);
-          gl_PointSize = (140.0 * vTw) / max(1.0, -mv.z);
+          gl_PointSize = min((110.0 * vTw) / max(1.0, -mv.z), 18.0);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
@@ -1004,7 +1036,11 @@ export class VoxelWorld {
         varying float vTw;
         void main(){
           vec4 tex = texture2D(uTex, gl_PointCoord);
-          gl_FragColor = vec4(uColor, tex.a * vTw * uOpacity);
+          // 中心亮核：萤火虫应是「有芯的亮点」，而不是均匀发光圆片
+          float r = length(gl_PointCoord - 0.5);
+          float core = smoothstep(0.18, 0.0, r);
+          vec3 col = mix(uColor, vec3(1.0), core * 0.7);
+          gl_FragColor = vec4(col, tex.a * vTw * uOpacity);
         }`,
     });
     this.fireflies = new THREE.Points(geo, mat);
@@ -1114,9 +1150,16 @@ export class VoxelWorld {
     };
     const shapeFrag =
       shape === 'dot'
-        ? `float a = smoothstep(0.5, 0.18, length(q));`
+        ? `float a = smoothstep(0.5, 0.16, length(q));
+           // 亮核 + 软晕：让雪花读起来是「晶点」而不是一团白雾
+           float core = smoothstep(0.22, 0.0, length(q));
+           vec3 tint = mix(col, vec3(1.0), core * 0.85);
+           col = tint;
+           a = max(a, core * 0.95);`
         : shape === 'streak'
-          ? `vec2 d = abs(q - vec2(0.0, 0.0)); float a = smoothstep(0.10, 0.03, d.x) * smoothstep(0.5, 0.42, d.y);`
+          ? `vec2 d = abs(q - vec2(0.0, 0.0)); float a = smoothstep(0.10, 0.03, d.x) * smoothstep(0.5, 0.42, d.y);
+             float core = smoothstep(0.05, 0.0, d.x) * smoothstep(0.36, 0.12, d.y);
+             col = mix(col, vec3(1.0), core * 0.7); a = max(a, core);`
           : shape === 'leaf'
             ? `vec2 e = q / vec2(0.42, 0.24); float a = smoothstep(1.0, 0.72, dot(e, e)); a *= 0.7 + 0.3 * smoothstep(0.0, 0.2, abs(q.x));`
             : `vec2 e = q / vec2(0.34, 0.26); float a = smoothstep(1.0, 0.65, dot(e, e));`;
@@ -1148,7 +1191,9 @@ export class VoxelWorld {
           vRot = uT * uSpin * (0.6 + s0 * 1.8) * uBoost + s1 * 6.2832;
           vMix = fract(s0 * 7.31 + s2 * 3.7);
           float sz = uSize * (0.5 + s2 * 1.3);
-          gl_PointSize = sz * 300.0 / max(1.0, -mv.z) * step(0.001, vA);
+          float d = max(1.0, -mv.z);
+          // 上限 26px：贴近相机的粒子不再膨胀成糊屏大白球（bloom 会把它放大成肥皂泡）
+          gl_PointSize = min(sz * 300.0 / d, 26.0) * step(0.001, vA);
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
@@ -1158,8 +1203,9 @@ export class VoxelWorld {
           vec2 pc = gl_PointCoord - 0.5;
           float c = cos(vRot), s = sin(vRot);
           vec2 q = vec2(pc.x * c - pc.y * s, pc.x * s + pc.y * c);
-          ${shapeFrag}
           vec3 col = vMix < 0.34 ? uColA : vMix < 0.67 ? uColB : uColC;
+          float a = 0.0;
+          ${shapeFrag}
           float alpha = a * vA * uOpacity;
           if (alpha < 0.01) discard;
           gl_FragColor = vec4(col, alpha);
@@ -1189,9 +1235,10 @@ export class VoxelWorld {
     this.snow = s.pts;
     this.snowU = s.uniforms;
     this.snowU.uFall.value = 0.5;
-    this.snowU.uSize.value = 0.34;
+    this.snowU.uSize.value = 0.4;
     this.snowU.uSpin.value = 0.0;
     this.snowU.uSway.value = 1.1;
+    this.snowU.uOpacity.value = 0.95;
     const r = this.makeFallSystem(RAIN_N, 'streak');
     this.rain = r.pts;
     this.rainU = r.uniforms;
@@ -1532,8 +1579,13 @@ export class VoxelWorld {
     this.sun.color.set(theme.sunColor);
     this.sun.intensity = theme.sunIntensity;
     this.sun.position.set(...theme.sunPosition);
+    // 半球光：天空侧取主题天顶色，地面侧取雾色（近似环境反射），强度随昼夜
+    this.hemi.color.set(theme.skyTop);
+    this.hemi.groundColor.set(theme.fog);
+    this.hemi.intensity = theme.night ? 0.34 : 0.5;
     this.bloom.strength = theme.bloom;
     this.bloom.radius = theme.bloomRadius * QUALITY_SETTINGS[this.quality].bloomRadiusScale;
+    this.renderer.toneMappingExposure = theme.exposure;
     this.charLight.color.set(theme.characterHalo);
     this.charHalo.material.color.set(theme.characterHalo);
     (this.charCore.material as THREE.MeshStandardMaterial).emissive.set(theme.characterCore);
@@ -1542,6 +1594,7 @@ export class VoxelWorld {
     // road palette uniforms
     for (let i = 0; i < 4; i++) this.roadU.uRoadCols.value[i].set(theme.roadBase[i % theme.roadBase.length]);
     for (let i = 0; i < 3; i++) this.roadU.uCurbCols.value[i].set(theme.curb[i % theme.curb.length]);
+    this.roadU.uLampCol.value.set(theme.lampGlow);
 
     // clouds & fireflies adapt to theme brightness
     const night = theme.night;
@@ -2167,6 +2220,10 @@ export class VoxelWorld {
       l.spot.material.opacity = Math.min(0.5, lf * (0.2 + pulse * 0.22 + flicker) * this.lampGlowBoost);
       const ss = (3.2 + pulse * 1.2) * Math.max(lf, 0.0001);
       l.spot.scale.set(ss, ss * 0.45, 1);
+      // 把灯位写进路面 shader 的光池 uniform（每盏灯的横向位置 + 强度）
+      this.roadU.uLampX.value[l.slot] = x;
+      this.roadU.uLampZ.value[l.slot] = z;
+      this.roadU.uLampI.value[l.slot] = lf * (0.55 + pulse * 0.6 + flicker) * this.lampGlowBoost;
       ((l.cone.material as THREE.ShaderMaterial).uniforms.opacity as { value: number }).value =
         theme.coneOpacity * lf * (0.7 + 0.6 * pulse + flicker);
     }
@@ -2388,7 +2445,7 @@ export class VoxelWorld {
     const sx = Math.sin(this.distance * 0.12) * 0.8;
     this.character.position.set(sx, bob, charZ);
     this.charLight.position.set(sx, 1.3 + bob, charZ + 0.4);
-    this.charLight.intensity = 9 + pulse * 8 + Math.sin(t * 3) * 0.8;
+    this.charLight.intensity = 2.2 + pulse * 1.4 + Math.sin(t * 3) * 0.22;
     this.charHalo.material.opacity = 0.34 + pulse * 0.14;
     const hs = 1.4 + pulse * 0.45 + Math.sin(t * 2.2) * 0.06;
     this.charHalo.scale.set(hs, hs, 1);
@@ -2425,6 +2482,11 @@ export class VoxelWorld {
     this.camera.lookAt(sx * 0.5, 1.3, charZ - 8);
 
     this.bloom.strength = theme.bloom + pulse * 0.16 + bands.level * 0.05;
+    // 曝光随低频轻微呼吸：让整个画面（而非只有 bloom）跟着鼓点起伏，
+    // 幅度刻意压得很小（±3%），否则会变成廉价频闪。
+    const baseExposure = theme.exposure;
+    const beatExposure = baseExposure * (1 + bands.bass * 0.03 + pulse * 0.02);
+    this.renderer.toneMappingExposure = beatExposure;
     this.composer.render();
   }
 
@@ -2543,10 +2605,12 @@ function makeGlowTexture(): THREE.Texture {
   c.width = c.height = 128;
   const g = c.getContext('2d')!;
   const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  // 中性白：色相交给调用方（主题色），避免叠加暖黄后所有粒子发橙
   grad.addColorStop(0, 'rgba(255,255,255,1)');
-  grad.addColorStop(0.25, 'rgba(255,240,200,0.6)');
-  grad.addColorStop(0.6, 'rgba(255,220,150,0.18)');
-  grad.addColorStop(1, 'rgba(255,220,150,0)');
+  grad.addColorStop(0.18, 'rgba(255,255,255,0.85)');
+  grad.addColorStop(0.45, 'rgba(255,255,255,0.28)');
+  grad.addColorStop(0.78, 'rgba(255,255,255,0.06)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(c);
