@@ -558,7 +558,10 @@ export class VoxelWorld {
              vWZ = position.z - uDist + (${(10 - ROAD_LEN / 2).toFixed(3)});
              vWX = position.x;
              vCurb = step(${((3 * 1.2 + 0.6)).toFixed(2)}, abs(position.x));
-             float wRow = floor(-vWZ / ${ROW_D.toFixed(3)});
+             // 行号先对 4096 取模再喂给 hash：sin 的参数必须保持「小」，
+             // 否则长距离行走后（row ~ 1e6）float32 的 ULP 会让 sin 变成常数/噪点，
+             // 石板纹理整体塌成平色。详见 ROAD_ROW_MOD 注释。
+             float wRow = mod(floor(-vWZ / ${ROW_D.toFixed(3)}), 4096.0);
              vJit = rhash(wRow * 31.0 + position.x * 7.31);
              transformed.y = -0.25 + vJit * 0.07 + vCurb * 0.14;`
           )
@@ -579,7 +582,10 @@ export class VoxelWorld {
           '#include <color_fragment>',
           `#include <color_fragment>
            {
-             float row = floor(-vWZ / ${ROW_D.toFixed(3)});
+             // 真实行号（可能达 1e6）只用于取值域内的小量，喂 hash 前先 mod 4096，
+             // 否则 float32 的 sin 参数失真 → 石板花纹塌成平色（长距离行走后可见）。
+             float rowRaw = floor(-vWZ / ${ROW_D.toFixed(3)});
+             float row = mod(rowRaw, 4096.0);
              float fv = fract(-vWZ / ${ROW_D.toFixed(3)});
              // irregular slabs: each row offset by its own hash, widths vary per slab
              float rowOff = frhash(row * 3.7 + 5.1) * 2.4;
@@ -1148,21 +1154,22 @@ export class VoxelWorld {
       uColB: { value: new THREE.Color('#ffffff') },
       uColC: { value: new THREE.Color('#ffffff') },
     };
+    // NOTE: `a` is declared once in main(); each branch must ASSIGN, never re-declare
+    // (GLSL has no nested scope here — a second `float a = ...` is a redefinition error).
     const shapeFrag =
       shape === 'dot'
-        ? `float a = smoothstep(0.5, 0.16, length(q));
+        ? `a = smoothstep(0.5, 0.16, length(q));
            // 亮核 + 软晕：让雪花读起来是「晶点」而不是一团白雾
-           float core = smoothstep(0.22, 0.0, length(q));
-           vec3 tint = mix(col, vec3(1.0), core * 0.85);
-           col = tint;
-           a = max(a, core * 0.95);`
+           float dotCore = smoothstep(0.22, 0.0, length(q));
+           col = mix(col, vec3(1.0), dotCore * 0.85);
+           a = max(a, dotCore * 0.95);`
         : shape === 'streak'
-          ? `vec2 d = abs(q - vec2(0.0, 0.0)); float a = smoothstep(0.10, 0.03, d.x) * smoothstep(0.5, 0.42, d.y);
-             float core = smoothstep(0.05, 0.0, d.x) * smoothstep(0.36, 0.12, d.y);
-             col = mix(col, vec3(1.0), core * 0.7); a = max(a, core);`
+          ? `vec2 d = abs(q); a = smoothstep(0.10, 0.03, d.x) * smoothstep(0.5, 0.42, d.y);
+             float strCore = smoothstep(0.05, 0.0, d.x) * smoothstep(0.36, 0.12, d.y);
+             col = mix(col, vec3(1.0), strCore * 0.7); a = max(a, strCore);`
           : shape === 'leaf'
-            ? `vec2 e = q / vec2(0.42, 0.24); float a = smoothstep(1.0, 0.72, dot(e, e)); a *= 0.7 + 0.3 * smoothstep(0.0, 0.2, abs(q.x));`
-            : `vec2 e = q / vec2(0.34, 0.26); float a = smoothstep(1.0, 0.65, dot(e, e));`;
+            ? `vec2 e = q / vec2(0.42, 0.24); a = smoothstep(1.0, 0.72, dot(e, e)); a *= 0.7 + 0.3 * smoothstep(0.0, 0.2, abs(q.x));`
+            : `vec2 e = q / vec2(0.34, 0.26); a = smoothstep(1.0, 0.65, dot(e, e));`;
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -1176,7 +1183,10 @@ export class VoxelWorld {
         void main(){
           float s0 = aSeed.x, s1 = aSeed.y, s2 = aSeed.z;
           float charZ = -uDist;
-          float z = charZ + 4.0 - uSpan + mod(s2 * uSpan + uDist * (0.9 + s0 * 0.2), uSpan);
+          // uDist 可能到 1e5+；先 mod 到 [0, uSpan) 再参与运算，
+          // 避免 float32 在大数上做 mod 时丢掉小数位（粒子会整体跳变/聚堆）。
+          float uD = mod(uDist, uSpan);
+          float z = charZ + 4.0 - uSpan + mod(s2 * uSpan + uD * (0.9 + s0 * 0.2), uSpan);
           float H = 14.0;
           float speedVar = 0.35 + s2 * 1.3;
           float y = mod(s1 * H - uT * uFall * speedVar * uBoost, H);
