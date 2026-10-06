@@ -157,8 +157,11 @@ export const THEMES: ThemePreset[] = [
     defaultWeather: 'leaves',
     skyTop: '#4a3b63',
     skyBottom: '#f2a35e',
-    fog: '#7d5470',
-    fogDensity: 0.02,
+    // 雾色去紫：旧值 #7d5470 是饱和紫，配 fogDensity 0.02 会把整个场景
+    // 连同路面、植被一起染成「一坨紫泥」（用户反馈「颜色/光照怪」的主因）。
+    // 改为低饱和暖灰玫瑰 —— 保留黄昏余晖的暖意，但不再吃掉物体固有色。
+    fog: '#a8836f',
+    fogDensity: 0.016,
     ambient: '#d9a06b',
     ambientIntensity: 0.4,
     sunColor: '#ff9a3d',

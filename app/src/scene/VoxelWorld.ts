@@ -32,7 +32,7 @@ const SPAN = ROAD_LEN; // recycling span shared by roadside props
 //   **绝不重建几何、不重分配数组**（见 docs/HANDOFF.md §2.4 硬约束）。
 // ---------------------------------------------------------------------------
 const BASE_GRASS_N = 760;
-const BASE_REED_N = 160; // tall grass-spike variant
+const BASE_REED_N = 110; // tall grass-spike variant（160 → 110：与 grass 同带内叠加时过密，读作「一片刺」）
 const BASE_FLOWER_N = 210; // split across 3 head shapes (i % 3)
 const BASE_TREE_N = 40;
 const BASE_ROCK_N = 104;
@@ -52,10 +52,10 @@ const BASE_UMBRELLA_N = 7;
 const BASE_SHELL_N = 26;
 // P3 新增微细节层 —— 密度不足的真正补药：这些元素单体极小，
 // 但紧贴已有植被/路面铺开，用「底层覆盖」把视觉密度抬起来（见 §13）。
-const BASE_MOSS_N = 96; // L0：贴地苔藓/地衣片，压在草丛根部
-const BASE_TALLGRASS_N = 54; // L3：高杆芒草，只在远侧轮廓区，拉出层次
+const BASE_MOSS_N = 68; // L0：贴地苔藓/地衣片，压在草丛根部（宁少勿多：多了会读成「地上的碎块」）
+const BASE_TALLGRASS_N = 34; // L3：芒草丛，远侧轮廓区（多则退化成「乱棍」，见 buildVegetation 的第四轮教训）
 const BASE_CURB_N = 30; // 路缘石：给路面一条明确的路肩线（**单侧**数量，实际实例 = 2×）
-const BASE_DECAL_N = 44; // 路面贴花：磨损/补丁/水渍，极小极暗的平面片
+const BASE_DECAL_N = 30; // 路面贴花：磨损/水渍，只压暗 5%~14% 的极淡平面片（宁少勿多）
 // P4 路旁设施：让路边「有人用过」的痕迹，是把场景从「布景」变成「场所」的关键。
 // 全部离线摆放（不自转、不脉动），只有 genFade 淡入淡出。
 const BASE_BENCH_N = 12; // 长椅：面向道路，供「看风景」的叙事落点
@@ -871,12 +871,16 @@ export class VoxelWorld {
     this.scene.add(this.grass);
 
     // reeds — taller, narrower crossed blades with a seed-head tip
-    const rBlade = new THREE.PlaneGeometry(0.09, 1.15);
-    rBlade.translate(0, 0.575, 0);
+    // ★ 视觉教训（第四轮）：旧值 `0.09 × 1.15` 的长径比 ≈ 12.8:1，是本场景里
+    //   最细的一层 —— 在秋季暖色（叶色 #d97b3f 等）下，160 根这样的薄叶在路旁
+    //   读成一排「红色的细棍/竹签」。修法：加宽到 0.17 并压矮到 0.92
+    //   （长径比 → ~5.4:1），保留「芦苇」的竖向感，但不再退化成刺。
+    const rBlade = new THREE.PlaneGeometry(0.17, 0.92);
+    rBlade.translate(0, 0.46, 0);
     const rB2 = rBlade.clone();
     rB2.rotateY(Math.PI / 2.5);
-    const rTip = new THREE.PlaneGeometry(0.14, 0.34);
-    rTip.translate(0, 1.22, 0);
+    const rTip = new THREE.PlaneGeometry(0.2, 0.3);
+    rTip.translate(0, 1.0, 0);
     const rTip2 = rTip.clone();
     rTip2.rotateY(Math.PI / 2.5);
     const reedGeo = mergeGeometries([rBlade, rB2, rTip, rTip2])!;
@@ -1039,20 +1043,35 @@ export class VoxelWorld {
     for (let i = 0; i < MAX_MOSS_N * 3; i++) this.mossSeed[i] = hash(i * 41.3 + 5);
     this.scene.add(this.mosses);
 
-    // L3 高杆芒草 —— 4 片十字长叶，比 reeds 更高更细，只在远侧轮廓带出现，
-    // 用来在天际线下方拉出一条「草尖毛边」，这是 low-poly 场景最缺的层次。
-    const tBlade = new THREE.PlaneGeometry(0.11, 1.75);
-    tBlade.translate(0, 0.875, 0);
-    const t2 = tBlade.clone();
-    t2.rotateY(Math.PI / 3);
-    const t3 = tBlade.clone();
-    t3.rotateY((Math.PI / 3) * 2);
-    // 略微内收的第二层，制造「一丛多叶」的厚度
-    const t4 = tBlade.clone();
-    t4.scale(0.72, 0.86, 1);
-    t4.rotateY(Math.PI / 6);
+    // L3 芒草丛 —— 只在远侧轮廓带出现，在天际线下方拉出一条「草尖毛边」。
+    // ★ 视觉教训（第四轮，务必记住）：
+    //   上一版用 4 片 `0.11 × 1.75` 的十字薄叶。0.11 宽、1.75 高的平面在稍远处
+    //   被侧向看到时只剩一条**竖直细缝**，再叠 54 个实例 × 随机 Y 旋转，
+    //   整体读成「满地折断的细木棍 / 倒伏的栅栏板」——这正是用户说的「太杂太乱」。
+    //   修法：**放弃十字薄叶，改成一丛「矮而宽、带锥度」的叶片**。
+    //   - 宽度 0.11 → 0.26（任何角度看都有可见面积，不再退化成细缝）
+    //   - 高度 1.75 → 1.02（只比 grass 的 0.5 高一倍，回到「草丛」而非「高杆」）
+    //   - 叶片顶端收窄（锥度），读作草叶而不是木板
+    //   - 6 片按 60° 均匀铺成莲座状，形成「一丛」的体量，而不是交叉的碎片
+    const tBlade = new THREE.PlaneGeometry(0.26, 1.02);
+    // 顶端收窄：把上边缘两点向中轴收拢，形成自然的草叶锥度
+    {
+      const p = tBlade.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        if (p.getY(i) > 0) p.setX(i, p.getX(i) * 0.35);
+      }
+      p.needsUpdate = true;
+      tBlade.computeVertexNormals();
+    }
+    tBlade.translate(0, 0.51, 0);
+    const tuftBlades: THREE.BufferGeometry[] = [tBlade];
+    for (let b = 1; b < 6; b++) {
+      const bl = tBlade.clone();
+      bl.rotateY((Math.PI / 3) * b);
+      tuftBlades.push(bl);
+    }
     this.tallGrass = new THREE.InstancedMesh(
-      mergeGeometries([tBlade, t2, t3, t4])!,
+      mergeGeometries(tuftBlades)!,
       new THREE.MeshStandardMaterial({ roughness: 0.92, flatShading: true, side: THREE.DoubleSide }),
       MAX_TALLGRASS_N
     );
@@ -1071,19 +1090,21 @@ export class VoxelWorld {
     this.scene.add(this.curbs);
 
     // 路面贴花 —— 贴地的极扁圆片，模拟磨损 / 补丁 / 干涸水渍。
-    // ★ 视觉教训（两轮）：
+    // ★ 视觉教训（三轮，务必记住）：
     //   1) opacity 0.5 + MeshStandardMaterial：被阳光照亮后比路面更亮 → 读成「地上的纸片」。
     //   2) 即便压到 0.14，只要是 Standard 材质，直射光仍可能让它亮过阴影中的路面。
-    // 结论：磨损在物理上只能是「暗于路面」的叠加。因此改用 MeshBasicMaterial（不受光）
-    // + 极暗固定色 + MultiplyBlending —— 数学上只可能压暗，不可能变亮。
-    // 冷中性灰（而非暖褐）：与蓝调雪面/夜色路面混合时只产生「变暗的湿痕」，
-    // 不会污染出橄榄黄——暖褐在冷色路面上会被读成「另一种材质」。
+    //   3) ★★ 致命一轮：改用 MultiplyBlending 后**误留深色材质色 #5c6068 + opacity 0.85**，
+    //      乘数 ≈ 0.36 × 0.7 × 0.85 ≈ 0.21 → 路面被压到约 21% 亮度（近黑），
+    //      在浅色路面（春/冬/沙滩）上直接读成「一个个破洞/污渍」，是最刺眼的杂乱源。
+    // 结论：Multiply 混合下**乘数必须贴近 1**。做法 —— 材质色恒定 #ffffff（基准 1.0），
+    // 压暗幅度**只由 instanceColor 的 0.86~0.95 决定**（只压暗 5%~14%，读作「淡淡湿痕」）。
+    // 冷中性（而非暖褐）：与蓝调雪面/夜色路面混合时不会污染出橄榄黄。
     this.decals = new THREE.InstancedMesh(
       new THREE.CircleGeometry(0.7, 6),
       new THREE.MeshBasicMaterial({
-        color: '#5c6068',
+        color: '#ffffff',
         transparent: true,
-        opacity: 0.85,
+        opacity: 1,
         depthWrite: false,
         // three 的硬性要求：MultiplyBlending 必须配 premultipliedAlpha，
         // 否则每个 draw call 都打一条 WebGLState 警告（实测会刷满 console）。
@@ -2399,7 +2420,12 @@ export class VoxelWorld {
     for (let i = 0; i < MAX_REED_N; i++)
       this.reeds.setColorAt(
         i,
-        tmpColor.set(theme.foliage[(hash(i * 2.7 + 9) * theme.foliage.length) | 0]).lerp(new THREE.Color(theme.curb[0]), 0.3)
+        // ★ 视觉教训（第四轮）：reeds 旧值 = foliage 色再 lerp curb 0.3 ——
+        //   秋季 foliage 是饱和橙红（#d97b3f/#c45a3a/#e8a04c），即便加宽了叶片，
+        //   110 根「橙红细高叶」仍读成一排「红色竹签」。芦苇本就是偏枯黄/灰绿的
+        //   老秆，颜色应当**明显退出 foliage 家族**：lerp 系数 0.3 → 0.72，
+        //   主体变成 curb 的枯褐色，只留 28% 叶色 —— 这样它才退回「背景草秆」。
+        tmpColor.set(theme.foliage[(hash(i * 2.7 + 9) * theme.foliage.length) | 0]).lerp(new THREE.Color(theme.curb[0]), 0.72)
       );
     this.reeds.instanceColor!.needsUpdate = true;
     for (let i = 0; i < MAX_FLOWER_N; i++) {
@@ -2488,14 +2514,13 @@ export class VoxelWorld {
         tmpColor.set(theme.rock[(hash(i * 31.7 + 11) * theme.rock.length) | 0]).multiplyScalar(0.88).lerp(this.snowCapColor, lift * 0.6)
       );
     this.curbs.instanceColor!.needsUpdate = true;
-    // 路面贴花：Multiply 混合下，instanceColor 直接作为「乘数」——
-    // 越接近 1 越不可见，越暗则压得越重。这里给 0.72~0.9 的随机暗度，
-    // 叠加材质自身 opacity 0.5，得到「若隐若现的暗渍」，且**不可能亮于路面**。
-    // 同时按主题的 roadBase 明度微调（雪白/沙色路面少压一点，深色路面多压一点）。
+    // 路面贴花：Multiply 混合下 instanceColor 就是「乘数」——越接近 1 越不可见。
+    // ★ 只允许 0.86~0.95（压暗 5%~14%）：读作「淡淡的湿痕/磨损」，绝不是黑斑。
+    //   曾经的 0.72 × 0.85 ≈ 0.21 会把路面压成近黑，在浅色路面上直接变成「破洞」。
     {
-      const roadDarkBias = theme.night ? 0.78 : 0.85;
+      const roadDarkBias = theme.night ? 0.965 : 0.99;
       for (let i = 0; i < MAX_DECAL_N; i++) {
-        const v = (0.72 + hash(i * 37.3 + 13) * 0.18) * roadDarkBias;
+        const v = (0.9 + hash(i * 37.3 + 13) * 0.07) * roadDarkBias;
         this.decals.setColorAt(i, tmpColor.setRGB(v, v, v));
       }
       this.decals.instanceColor!.needsUpdate = true;
@@ -2691,9 +2716,10 @@ export class VoxelWorld {
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 1.3, i * 2.1) > 0.5 ? 1 : -1;
       const rx = hash2(cyc * 2.3, i + 17);
-      const sway = Math.sin(t * 1.3 + s2 * 10 + z * 0.3) * (0.14 + bands.mid * 0.3);
+      const sway = Math.sin(t * 1.3 + s2 * 10 + z * 0.3) * (0.1 + bands.mid * 0.22);
       const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
-      dummy.position.set(side * (5.4 + rx * 3.2), 0, z);
+      // 后退到 6.2 起（旧 5.4）—— 让开 grass 的近景带，避免两层细叶在同一带内叠加成「刺丛」
+      dummy.position.set(side * (6.2 + rx * 2.6), 0, z);
       dummy.rotation.set((rx - 0.5) * 0.2, s2 * 6.3 + cyc, sway * side);
       dummy.scale.set(gf * (0.7 + s0 * 0.5), (0.8 + s0 * 0.8) * gf, gf);
       dummy.updateMatrix();
@@ -2714,13 +2740,19 @@ export class VoxelWorld {
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 48 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 2.7, i * 3.3) > 0.5 ? 1 : -1;
-      // 苔藓比草更靠近路肩（5.0 ~ 9.5），是「人工路面 → 自然草皮」的过渡
-      const x = side * (5.0 + hash2(cyc, i * 5.5) * 4.5);
+      // 苔藓比草更靠近路肩，是「人工路面 → 自然草皮」的过渡。
+      // ★ 内沿必须让开路面：路面半宽 4.8，苔藓 X 半径最大约 1.1（见下方 scale），
+      //   所以内沿至少 6.0 才不会压到路面（旧值 5.0 → 0.2 就贴到路沿上，读成「路上的碎块」）。
+      const x = side * (6.0 + hash2(cyc, i * 5.5) * 3.5);
       const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
-      dummy.position.set(x, 0.015, z);
-      dummy.rotation.set(0, s1 * 6.3 + cyc, (s0 - 0.5) * 0.14);
-      // 极扁：Y 压到 0.06~0.13，X/Z 反而铺开到 1.2~2.4 倍
-      dummy.scale.set(gf * (1.2 + s0 * 1.2), gf * (0.06 + s1 * 0.07), gf * (1.2 + s2 * 1.2));
+      dummy.position.set(x, 0.03, z);
+      dummy.rotation.set(0, s1 * 6.3 + cyc, 0);
+      // ★ 视觉教训（第四轮）：旧值 Y 压到 0.06~0.13，而 X/Z 铺到 1.0~1.9 倍，
+      //   在半径 0.34 的二十面体上得到长径比 ≈ 21:1 → 侧看就是一根「细刺/薄片」，
+      //   15 个近景实例全部命中（CDP 实测 maxAspect=21.2）。这正是「满地的碎棍」的另一半来源。
+      //   修法：Y 下限抬到能保持「扁但有厚度」（长径比 ≤ ~6:1），X/Z 收敛到 1.3~2.0。
+      //   这样它才读作「一摊贴地的苔绿」，而不是「插在地上的薄片」。
+      dummy.scale.set(gf * (1.3 + s0 * 0.7), gf * (0.42 + s1 * 0.16), gf * (1.3 + s2 * 0.7));
       dummy.updateMatrix();
       this.mosses.setMatrixAt(i, dummy.matrix);
     }
@@ -2736,11 +2768,13 @@ export class VoxelWorld {
       if (z < charZ - 60 && ((frame + i) & 1) === 1) continue; // 最远层，更新更省
       const side = hash2(cyc * 3.9, i * 1.7) > 0.5 ? 1 : -1;
       const rx = hash2(cyc * 2.1, i + 41);
-      const sway = Math.sin(t * 1.05 + s2 * 8 + z * 0.22) * (0.1 + bands.mid * 0.26);
+      const sway = Math.sin(t * 1.05 + s2 * 8 + z * 0.22) * (0.08 + bands.mid * 0.18);
       const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
-      dummy.position.set(side * (7.0 + rx * 6.0), 0, z);
-      dummy.rotation.set((rx - 0.5) * 0.18, s2 * 6.3 + cyc, sway * side);
-      dummy.scale.set(gf * (0.85 + s0 * 0.5), (0.85 + s0 * 0.6) * gf, gf);
+      // 内沿让开路面：草丛 X 半径最大约 1.3，内沿 6.4 → 最近处 5.1，仍在路沿 4.8 之外
+      dummy.position.set(side * (6.4 + rx * 5.2), 0, z);
+      // 倾角收敛（±0.18 → ±0.10）：过大的随机倾角是「倒伏的木棍」观感的主要来源
+      dummy.rotation.set((rx - 0.5) * 0.1, s2 * 6.3 + cyc, sway * side);
+      dummy.scale.set(gf * (0.9 + s0 * 0.45), (0.9 + s0 * 0.5) * gf, gf);
       dummy.updateMatrix();
       this.tallGrass.setMatrixAt(i, dummy.matrix);
     }
@@ -2786,9 +2820,9 @@ export class VoxelWorld {
       // 横向压在路面宽度内（±4.8），纵向随机旋转避免看出是圆
       dummy.position.set((hash2(cyc * 4.3, i * 6.1) - 0.5) * 9.6, 0.012, z);
       dummy.rotation.set(-Math.PI / 2, 0, s1 * 6.3 + cyc * 2.4);
-      // 尺寸也收小（0.45~1.3 倍），大片贴花更容易读成「异物」
-      const ds = gf * (0.45 + s2 * 0.85);
-      dummy.scale.set(ds * (0.6 + s0 * 1.4), ds, ds);
+      // 尺寸收小（0.4~0.9 倍）：大片贴花即便很淡也更容易读成「异物」
+      const ds = gf * (0.4 + s2 * 0.5);
+      dummy.scale.set(ds * (0.75 + s0 * 0.7), ds, ds);
       dummy.updateMatrix();
       this.decals.setMatrixAt(i, dummy.matrix);
     }
@@ -3079,12 +3113,17 @@ export class VoxelWorld {
       const present = hash2(cyc * 1.9, i * 2.3) > 0.4;
       const side = hash2(cyc * 2.1, i * 4.9) > 0.5 ? 1 : -1;
       const sf = this.genFade(z, charZ - SPAN, charZ + 2, s0) * (present ? 1 : 0);
-      const lying = hash2(cyc * 5.3, i) > 0.5;
+      // ★ 视觉教训（第四轮）：`lying` 默认 0.5 + 长度缩放 (1.6+s1) 让倒木长径比达到 ~13:1，
+      //   再配随机 Y 朝向，整体读成「满地的红木棍」。修法：
+      //   - 倒木概率 0.5 → 0.22（树桩为主，倒木只是偶尔的点缀）
+      //   - 倒木长度 (1.6+s1) → (1.0+s1*0.5)（≈1.0~1.5），并加粗径向 0.8 → 1.25
+      //     长径比收敛到 ~5:1，才像一段「木头」而不是一根「棍」。
+      const lying = hash2(cyc * 5.3, i) > 0.78;
       const sc = (0.7 + s2 * 0.7) * sf;
       if (lying) {
-        dummy.position.set(side * (5.5 + hash2(cyc, i * 6.1) * 2.4), 0.13 * sc, z); // embedded, not floating
+        dummy.position.set(side * (5.5 + hash2(cyc, i * 6.1) * 2.4), 0.16 * sc, z); // embedded, not floating
         dummy.rotation.set(0, s0 * 6.3, Math.PI / 2);
-        dummy.scale.set(sc * 0.8, sc * (1.6 + s1), sc * 0.8);
+        dummy.scale.set(sc * 1.25, sc * (1.0 + s1 * 0.5), sc * 1.25);
       } else {
         dummy.position.set(side * (5.5 + hash2(cyc, i * 6.1) * 2.4), 0.3 * sc, z);
         dummy.rotation.set(0, s0 * 6.3, 0);
@@ -3426,9 +3465,10 @@ export class VoxelWorld {
     // ------------------------------------------------------------------
 
     // 雪面脚印：只在「雪主题」或「雪天气」时出现（extras=false 的 low 档关闭）。
-    // 印子固定在角色身后 0.9m 起、每 0.62m 一个，共 FOOTPRINT_N 步 → 约 11m 长的足迹，
-    // 更远的印子会被雾与相机淘汰，因此**无需环槽回收**（这也是它比其它层更省的原因）。
-    this.footprints.visible = snowActive && this.extras;
+    // ★ 阈值从 >0.02 提到 >0.3：wI.snow 是**平滑插值**量，切离雪天时会缓慢衰减，
+    //   用 0.02 会让脚印在「冬→春/沙滩」的过渡里残留数秒 → 路面上出现一片浅蓝
+    //   「浮着的矩形」，被误读成异物（实测踩到）。抬高阈值即在新天气里立刻收掉。
+    this.footprints.visible = snowActive && wI.snow > 0.3 && this.extras;
     if (this.footprints.visible) {
       const side = Math.sin(this.distance * 0.12) * 0.5; // 跟随角色的横向摆动
       for (let k = 0; k < FOOTPRINT_N * 2; k++) {
