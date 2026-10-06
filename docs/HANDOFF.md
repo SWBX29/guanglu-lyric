@@ -299,7 +299,7 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 
 ---
 
-## 8. 环境陷阱与解法（**本机特有，16 条，编号稳定**）
+## 8. 环境陷阱与解法（**本机特有，18 条，编号稳定**）
 
 1. **`package-lock.json` 内网镜像**：曾指向 `npm.mirrors.msh.team`（ECONNRESET），已归一化到 `registry.npmjs.org`。重新生成 lockfile 后要复查。
 2. **npm 生命周期脚本被拦**：esbuild postinstall 走 spawn+管道 → EPERM。**安装用 `npm ci --ignore-scripts`**（@esbuild/win32-x64 作为 optionalDep 会正常落盘）。
@@ -317,6 +317,8 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 14. **沙箱内 `wrangler d1` 本地命令必崩**（`_cf_ALARM: no such table` + uv async 断言失败）→ `db:apply:local` / `d1 execute --local`（含 `--file`）**一律沙箱外执行**。本地 Cron 手动触发见 §4.2。
 15. **生产直连播放的两个浏览器侧拦截点（已修复）**：① `_headers` 的 CSP `media-src 'self'` 直接拒绝跨源音频；② outer 端点 302 落到 **http** CDN（`*.music.126.net`），HTTPS 页面属混合内容。**解法**：CSP 放行 `https://music.163.com https://*.music.126.net` + `upgrade-insecure-requests`（302 目标升级为 https）。注意 `_headers` 改动需重新部署；CF 探针（cloudflareinsights）也需放行否则控制台报资源错误。
 16. **歌词特效移动端"糊团"（已修复）**：勿用「父子元素 `background-clip:text` 渐变 + 子元素 `opacity/filter` 动画」组合（移动端渲染出无字形光斑）。**现行方案**：实色文字 + `mask-image` 扫光 + 纯透明度逐字揭示。遇到"桌面正常、手机异常"的文字特效，优先怀疑 clip/filter 与合成层交互。
+17. **`MultiplyBlending` 必须配 `premultipliedAlpha: true`**：three 对「乘算混合 + 非预乘 alpha」的材质**每个 draw call 打一条 `WebGLState` 警告**，会刷满 console 掩盖真实错误。路面贴花（`decals`）踩过：贴花本身"看起来是对的"（只是 console 噪声），极易漏掉。**凡是 `blending: THREE.MultiplyBlending` 的材质，一并写 `premultipliedAlpha: true`**。
+18. **`InstancedMesh` 容量必须按「最大实例数」而不是「逻辑对象数」预分配**：左右成对摆放的道具（路缘石 `curbs`、篱笆 `fences`）若单侧计 N 个，实际会写 2N 个实例 → `setMatrixAt(2N-1, …)` 越界（**静默不报错**，表现为部分道具消失或错位）。`MAX_*` 是单侧上限，mesh 容量写 `MAX_* * 2`（与 `canopyLow` 的 `MAX_TREE_N * 2` 同惯例）。
 
 ---
 
@@ -366,6 +368,12 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 | 窄屏歌词开关被挤出/贴左屏边 | 是否回退成 `calc(min(80vw,300px)+32px)`（§2.4 窄屏约定 / D-11 / V34） |
 | 矮屏网易云面板列表几乎看不见 | 容器是否回退成固定 `top-[4.5rem] bottom-28`；QR 是否缺 `min-[375px]:` 断点（§2.4 / V34） |
 | 本地文件播放点了没反应 | `begin()` 是否仍在 fire-and-forget 调 `play()`（§2 播放状态机 / V34） |
+| 路面出现「纸片/垃圾」状浅色块 | 贴花材质被改成受光材质了；必须 `MeshBasicMaterial` + `MultiplyBlending`（§13.4） |
+| 低画质下、非城市主题里出现红绿灯 | `refreshPropVisibility()` 未被调用 / 可见性被单开关直写（§13.2） |
+| 某类道具少了几个/位置错乱 | `InstancedMesh` 容量按逻辑数而非最大实例数分配（左右成对层须 ×2，陷阱 18） |
+| 切档位卡顿 | 是否重建了几何；应只改 `InstancedMesh.count` / `setDrawRange`（§13.1） |
+| 控制台刷 `MultiplyBlending requires premultipliedAlpha` | 乘算混合材质缺 `premultipliedAlpha: true`（陷阱 17） |
+| 调低画质后画面变化很小 | `ambienceExtras` / `lampLayers` / `shadowQuality` 等字段是否真的被消费（§13.1/13.5） |
 
 ---
 
@@ -382,3 +390,107 @@ git -c "http.proxy=http://127.0.0.1:7900" -c "https.proxy=http://127.0.0.1:7900"
 3. **审计日志 —— ✅ 已完成**：四类事件 + HMAC 主体哈希 + 防刷节流 + 90 天保留（§2.1）；端到端验证见旧版 V28（已随旧文档移除，结论仍有效）。
 4. **生产播放 —— 直连模式 + CSP 修复已上线**（§2.2 / V31 / V32），真机出声待确认。
 5. **歌词栏 —— 糊团修复已上线**（§2.3 / V33），真机复看待确认。
+
+---
+
+## 13. 场景美术与光照：三层密度/分档体系（2026-10-05 新增）
+
+> 需求背景：用户连续三轮反馈「不局限于现有画面，可以更丰富（做好性能层级和自身优化）」→
+> 「场景细节还是不够」。**核心痛点收敛为「细节密度 / 微细节」而非「元素种类」**。
+> 改造范围：`themes.ts`（主题参数层）+ `VoxelWorld.ts`（场景结构层）+ `quality.ts`（画质联动层）。
+
+### 13.1 三层常量体系（**改密度前必读**）
+
+```
+BASE_*  = medium（densityScale = 1.0）基准数量
+MAX_*   = round(BASE * MAX_DENSITY_SCALE)，MAX_DENSITY_SCALE = 1.4
+          → **所有 InstancedMesh / BufferGeometry 的预分配容量**
+effective = clamp(round(BASE * max(MIN_DENSITY=0.6, densityScale)), 1, MAX)
+```
+
+- **降级方式**：`InstancedMesh.count = effective`（three 按 count 遍历，**切档零重建几何**）；
+  `Points` 用 `setDrawRange`。**绝不重建几何、不重分配数组**（§2.4 硬约束）。
+- `applyDensity()`（`VoxelWorld`）算全部 effective count 并同步 `count`；
+  `applyDecorDensity()` 只调 `Points.setDrawRange` + 蝴蝶逐只显隐。
+- **构造函数顺序必须「先 `applyDensity()` 再 `applyDecorDensity()`」**：后者依赖 `this.extras`。
+- `QUALITY_SETTINGS.ambienceExtras` 是 **P3/P4 新增层的总闸**（low = false → 新层 count 全 0）。
+
+### 13.2 正交可见性合成（`refreshPropVisibility`）
+
+`traffic` / `clouds` 的可见性同时受 **主题族**（`setTheme`）与 **档位**（`applyDensity`）控制。
+两处各自直写 `visible` 会互相覆盖——症状是「低档位下、非城市主题里，出现卡在路边的幽灵红绿灯」
+（setTheme 把被裁掉的红绿灯重新点亮到上一轮的**陈旧位置**）。
+
+**正解**：两个开关分别写 `userData.familyOn` / `userData.byDensity`，
+由 `refreshPropVisibility()` 合成 `visible = familyOn && byDensity`，
+`setTheme` 与 `applyDensity` 末尾都调用它。
+
+### 13.3 新增的密度层（数量随档位；low 档不画）
+
+| 层 | BASE | 说明 | 可见条件 |
+|---|---|---|---|
+| `mosses`（L0 苔藓） | 96 | 极扁多面体贴地，铺在路肩→草皮过渡带（\|x\| 5.0~9.5） | `!isCity` |
+| `tallGrass`（L3 高杆芒草） | 54 | 4 片十字长叶，只在远侧（\|x\| 7~13）拉地平线毛边 | `!isCity` |
+| `curbs`（路缘石） | 30 ×2 | 半埋矮条石（0.3×0.16×1.0，y=0.055），给路面一个路肩参照 | 全主题 |
+| `decals`（路面贴花） | 44 | 磨损/湿痕，`MultiplyBlending` 暗渍（见 §13.4） | 全主题 |
+| `benches`（长椅） | 12 | 座+背+双腿合并几何，朝道路 | 全主题 |
+| `signs`（路牌） | 10 | 细杆 + 方板 | 全主题 |
+| `fences`（矮篱笆） | 14 ×2 | 柱高 0.52、每段仅占间距 55%、`s2<0.22` 断段 | `!isCity` |
+| `farTreeLine`（远景剪影带） | 1 | 96 齿 `ShapeGeometry`，`z = charZ - 160`，视差≈0 | `!isBeach` |
+| `footprints`（雪面脚印） | 18 ×2 | 身后 0.9m 起、每 0.62m 一个，越远越淡 | `snowActive && extras` |
+| `dust`（灯下微尘） | 240 点 | 纯 GPU 上浮粒子，聚集在 \|x\|≈5.4 的灯柱区 | `extras && !rain` |
+
+**容量陷阱**：`curbs` / `fences` 是左右成对摆放，`MAX_*` 是**单侧**上限，
+故 mesh 容量写 `MAX_* * 2`（与 `canopyLow` 的 `MAX_TREE_N * 2` 同惯例）。见 §8 陷阱 18。
+
+### 13.4 视觉教训：贴花必须「只能压暗」
+
+路面贴花（`decals`）改过两轮才做对：
+1. 初版 `MeshStandardMaterial` + `opacity 0.5` → 受阳光照亮后**比路面更亮**，读成「地上的纸片/垃圾」。
+2. 压到 `opacity 0.14` 仍是 Standard 材质，直射光下在阴影路面中依旧偏亮。
+3. **正解**：`MeshBasicMaterial`（不受光）+ `MultiplyBlending` + `premultipliedAlpha: true`
+   + **冷中性灰** `#5c6068`，`instanceColor` 作乘数（0.72~0.9 随机，夜间偏置 0.78）。
+   → 数学上只可能压暗、不可能变亮。
+
+配套结论：
+- **不要给贴花做「雪面提亮」**（暖褐 × 冷色雪面 = 橄榄黄，读成另一种材质）。
+- **路牌面板不要向纯白插值**（会在雾里读成「悬空的纸片」）；用主题 `curb` 色 ×0.78。
+- **篱笆不要高、不要首尾相接**：初版柱高 0.72 + 密排 → 两侧连成「围栏墙」压过植被；
+  压到 0.52 + 55% 占距 + 断段 + 颜色 ×0.62 后才是「隐约的田埂边界」。
+
+### 13.5 P6 灯光质感与假阴影
+
+- **灯柱三层光晕**：`glow`（内核）/ `glowOuter`（中层，3.4×）/ `glowFar`（P6 外层，8×，最淡）。
+  由 `lampLayers`（1/2/3）与 `volumetricLight`/`godrayLayers` 分别控制 `glowOuter`/`glowFar`/`cone`/`spot`。
+- **假接触阴影双层椭圆**：slot 0 = 内层小而深，slot 1 = 外层大而淡（`shadowQuality>=2` 才画）。
+  slot 2.. = 灯柱在路面的**长条影**（拉伸贴片朝路面中心倒）。**始终不开 shadowMap**
+  （无限赛道 + 全实例化每帧重写 + `genFade` 缩零实例 → 阴影相机抖动/漏光，收益代价倒挂）。
+- **海面反射带 `uReflect`**：以 `uReflectX`（跟随 `celestialX`）为中心的高斯亮带 + 高频 glint
+  调制成碎光；强度取主题 `seaReflect`，颜色取 `celestialColor`。
+- **天空三层 `uHorizonSharp`**：`bottom → mist（mistColor ?? fog）→ top` 三段混合，
+  夜间 `horizonSharp = 1.05`、日景 `0.7`。`mist` 默认取 `fog` 以保证天地无缝。
+- **霓虹上色**：逐实例取主题 `neonHue`，叠加 0.75~1.1 亮度错落，夜晚 ×1、白天 ×0.55。
+
+### 13.6 P5 动态微细节
+
+- **涟漪 3 环 → 5 环**（路面 shader，`for k < 5`）。
+- **踩草倒伏**：角色前后 3.5m 内、靠近路肩的草被「压向路外」，
+  权重 `near²`（连续衰减，避免硬阈值的台阶感）；`extras=false` 时关闭。
+- **雪面脚印**：位置是 `distance` 的纯函数（无需环槽回收——印子只在身后 11m 内）。
+- **灯下微尘**：240 点纯 GPU 上浮，`uOpacity` 夜间 0.42 / 白天 0.16 + 脉动。
+
+### 13.7 分档实测（CDP 探针，SwiftShader）
+
+| 档位 | InstancedMesh 数 | 实绘实例 | Sprite 数 | Points 顶点 |
+|---|---|---|---|---|
+| low | 9 | **628** | 13 | 903 |
+| medium | 17 | 1362 | 35 | 966 |
+| high | 17 | **1902** | 46 | 966 |
+
+- low 档比 high 少画 **67%** 实例；medium 起多出的 8 个 InstancedMesh 正是 P3/P4 新层。
+- **low 档不绘制任何新增内容** → 「low 帧率不低于改造前」由构造保证。
+- SwiftShader 下三档帧率差异被全屏 fill 淹没（均 ~8.5fps），**绝对帧率无参考价值**，
+  只能用于同机 A/B；真机帧率仍需本地 GPU 实测。
+- **验证法**：无头 Edge + CDP 注入 `gl.compileShader`/`gl.linkProgram` 钩子 +
+  `Page.reload({ignoreCache:true})`；本轮全部新增 shader（海面反射/天空 mist/微尘）编译 0 错误、
+  运行期 console 0 error。探针必须 `run_in_background` 起 Vite 与 Edge，否则命令返回时子进程被杀。

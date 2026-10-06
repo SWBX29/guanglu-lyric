@@ -5,7 +5,13 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { ThemePreset, WeatherMode } from '../lib/themes';
-import { resolveQuality, QUALITY_SETTINGS, loadQualityChoice, type QualityLevel } from '../lib/quality';
+import {
+  resolveQuality,
+  QUALITY_SETTINGS,
+  loadQualityChoice,
+  MAX_DENSITY_SCALE,
+  type QualityLevel,
+} from '../lib/quality';
 
 export type { WeatherMode } from '../lib/themes';
 
@@ -15,40 +21,101 @@ const ROAD_SEGS = 110; // segments along
 const ROAD_W = 3 * 2 * 1.2 + 2.4; // road + curb strips
 const ROAD_LEN = ROAD_SEGS * ROW_D;
 const SPAN = ROAD_LEN; // recycling span shared by roadside props
-const GRASS_N = 760;
-const REED_N = 160; // tall grass-spike variant
-const FLOWER_N = 210; // split across 3 head shapes (i % 3)
-const TREE_N = 40;
-const TREE_SPAN = 260;
-const ROCK_N = 104;
-const BUSH_N = 74;
-const MUSH_N = 52;
-const STUMP_N = 30;
-const PUDDLE_N = 16;
-const LAMP_N = 8;
+
+// ---------------------------------------------------------------------------
+// 场景元素基准数量（BASE = medium 档密度 1.0 时的数量）。
+//
+// 运行时的「实际绘制数量」由画质档位的 densityScale 决定：
+//   effective = max(MIN, round(BASE * densityScale))，并夹在 [MIN, MAX] 内；
+//   MAX = round(BASE * MAX_DENSITY_SCALE)，即 high 档上限 —— 所有 InstancedMesh /
+//   Points 的**容量一律按 MAX 预分配**，切档时只用 setDrawRange / scale=0 降级，
+//   **绝不重建几何、不重分配数组**（见 docs/HANDOFF.md §2.4 硬约束）。
+// ---------------------------------------------------------------------------
+const BASE_GRASS_N = 760;
+const BASE_REED_N = 160; // tall grass-spike variant
+const BASE_FLOWER_N = 210; // split across 3 head shapes (i % 3)
+const BASE_TREE_N = 40;
+const BASE_ROCK_N = 104;
+const BASE_BUSH_N = 74;
+const BASE_MUSH_N = 52;
+const BASE_STUMP_N = 30;
+const BASE_PUDDLE_N = 16;
+const BASE_LAMP_N = 8;
+const BASE_CLOUD_N = 9;
+const BASE_FIREFLY_N = 90;
+const BASE_BUTTERFLY_N = 4;
+const BASE_BUILD_N = 34;
+const BASE_NEON_N = 16;
+const BASE_TRAFFIC_N = 3;
+const BASE_PALM_N = 16;
+const BASE_UMBRELLA_N = 7;
+const BASE_SHELL_N = 26;
+// P3 新增微细节层 —— 密度不足的真正补药：这些元素单体极小，
+// 但紧贴已有植被/路面铺开，用「底层覆盖」把视觉密度抬起来（见 §13）。
+const BASE_MOSS_N = 96; // L0：贴地苔藓/地衣片，压在草丛根部
+const BASE_TALLGRASS_N = 54; // L3：高杆芒草，只在远侧轮廓区，拉出层次
+const BASE_CURB_N = 30; // 路缘石：给路面一条明确的路肩线（**单侧**数量，实际实例 = 2×）
+const BASE_DECAL_N = 44; // 路面贴花：磨损/补丁/水渍，极小极暗的平面片
+// P4 路旁设施：让路边「有人用过」的痕迹，是把场景从「布景」变成「场所」的关键。
+// 全部离线摆放（不自转、不脉动），只有 genFade 淡入淡出。
+const BASE_BENCH_N = 12; // 长椅：面向道路，供「看风景」的叙事落点
+const BASE_SIGN_N = 10; // 路牌：细杆 + 小方板
+const BASE_FENCE_N = 14; // 篱笆：稀疏的矮栏分段，只作为「野地边界」的暗示，不连成围栏墙
+
+/** high 档上限（= MAX_DENSITY_SCALE 倍），即所有实例 buffer 的预分配容量 */
+const MAX_GRASS_N = Math.round(BASE_GRASS_N * MAX_DENSITY_SCALE);
+const MAX_REED_N = Math.round(BASE_REED_N * MAX_DENSITY_SCALE);
+const MAX_FLOWER_N = Math.round(BASE_FLOWER_N * MAX_DENSITY_SCALE);
+const MAX_TREE_N = Math.round(BASE_TREE_N * MAX_DENSITY_SCALE);
+const MAX_ROCK_N = Math.round(BASE_ROCK_N * MAX_DENSITY_SCALE);
+const MAX_BUSH_N = Math.round(BASE_BUSH_N * MAX_DENSITY_SCALE);
+const MAX_MUSH_N = Math.round(BASE_MUSH_N * MAX_DENSITY_SCALE);
+const MAX_STUMP_N = Math.round(BASE_STUMP_N * MAX_DENSITY_SCALE);
+const MAX_PUDDLE_N = Math.round(BASE_PUDDLE_N * MAX_DENSITY_SCALE);
+const MAX_LAMP_N = Math.round(BASE_LAMP_N * MAX_DENSITY_SCALE);
+const MAX_CLOUD_N = Math.round(BASE_CLOUD_N * MAX_DENSITY_SCALE);
+const MAX_FIREFLY_N = Math.round(BASE_FIREFLY_N * MAX_DENSITY_SCALE);
+const MAX_BUTTERFLY_N = Math.round(BASE_BUTTERFLY_N * MAX_DENSITY_SCALE);
+const MAX_BUILD_N = Math.round(BASE_BUILD_N * MAX_DENSITY_SCALE);
+const MAX_NEON_N = Math.round(BASE_NEON_N * MAX_DENSITY_SCALE);
+const MAX_TRAFFIC_N = Math.round(BASE_TRAFFIC_N * MAX_DENSITY_SCALE);
+const MAX_PALM_N = Math.round(BASE_PALM_N * MAX_DENSITY_SCALE);
+const MAX_UMBRELLA_N = Math.round(BASE_UMBRELLA_N * MAX_DENSITY_SCALE);
+const MAX_SHELL_N = Math.round(BASE_SHELL_N * MAX_DENSITY_SCALE);
+const MAX_MOSS_N = Math.round(BASE_MOSS_N * MAX_DENSITY_SCALE);
+const MAX_TALLGRASS_N = Math.round(BASE_TALLGRASS_N * MAX_DENSITY_SCALE);
+const MAX_CURB_N = Math.round(BASE_CURB_N * MAX_DENSITY_SCALE); // 单侧上限；mesh 容量为 2×
+const MAX_DECAL_N = Math.round(BASE_DECAL_N * MAX_DENSITY_SCALE);
+const MAX_BENCH_N = Math.round(BASE_BENCH_N * MAX_DENSITY_SCALE);
+const MAX_SIGN_N = Math.round(BASE_SIGN_N * MAX_DENSITY_SCALE);
+const MAX_FENCE_N = Math.round(BASE_FENCE_N * MAX_DENSITY_SCALE); // 单侧上限；mesh 容量为 2×
+
+/** low 档下限：保证任何元素都不会稀到「看不见」 */
+const MIN_DENSITY = 0.6;
+
+/** 冰凌数 = 灯柱上限（每盏灯挂一串），容量按上限预分配 */
+const ICICLE_N = MAX_LAMP_N;
+/**
+ * 接触阴影实例数：
+ *   slot 0 = 角色主影（内层，深）
+ *   slot 1 = 角色副影（P6 外层，大而淡 → 双层椭圆更像软阴影）
+ *   slot 2.. = 近处路灯在路面上的长条影（每盏 1 条，按灯柱上限预分配）
+ */
+const CONTACT_SHADOW_N = 2 + MAX_LAMP_N;
+/** 雪面脚印环槽数：左右交替，共 2×N 个印子；N 越大足迹越远越长 */
+const FOOTPRINT_N = 18;
+
 const LAMP_H = 3.6;
-const CLOUD_N = 9;
-const FIREFLY_N = 90;
-const BUTTERFLY_N = 4;
+const TREE_SPAN = 260;
 const METEOR_N = 3;
-// GPU-driven falling particle counts (zero per-frame CPU)
+// GPU-driven falling particle counts (zero per-frame CPU) —— 天气粒子不随密度缩放，
+// 它们的量级由天气强度（uIntensity）驱动，与场景「静物密度」是两回事。
 const PETAL_N = 520;
 const LEAF_N = 420;
 const SNOW_N = 1300;
 const RAIN_N = 1000;
 /** wind weather streak count */
 const STREAK_N = 260;
-// city props
-const BUILD_N = 34;
-const NEON_N = 16;
-const TRAFFIC_N = 3;
-// beach props
-const PALM_N = 16;
-const UMBRELLA_N = 7;
-const SHELL_N = 26;
-const ICICLE_N = LAMP_N; // winter icicles hanging from lamp arms
-/** 接触阴影实例数：0 = 角色，其余为近处路灯锚点 */
-const CONTACT_SHADOW_N = 1 + LAMP_N;
 const MTN_W = 360; // width of one ridge tile
 const MTN_K = [0.055, 0.035, 0.02]; // parallax rate per layer
 const MTN_Z = [-64, -92, -122]; // depth behind the walker per layer
@@ -68,6 +135,7 @@ interface Lamp {
   group: THREE.Group;
   glow: THREE.Sprite; // inner hot halo
   glowOuter: THREE.Sprite; // large soft bloom shell
+  glowFar: THREE.Sprite; // P6 最外层雾状光晕（半径 8，最淡）
   spot: THREE.Sprite; // warm pool of light on the ground
   cone: THREE.Mesh;
   side: number;
@@ -83,10 +151,14 @@ export class VoxelWorld {
   bloom!: UnrealBloomPass;
   /** 当前画质档位（构造时按设备探测，可由 setQuality 覆盖） */
   quality: QualityLevel = 'medium';
+  /** 雾密度/曝光呼吸开关（由画质档位决定，low 关闭） */
+  private fogBreath = true;
   /** 接触阴影层（角色/道具根部的低成本假阴影），low 档隐藏 */
   private contactShadows: THREE.InstancedMesh | null = null;
   /** project() 复用实例（避免每帧分配） */
   private projectV = new THREE.Vector3();
+  /** setTheme 里 lerp 到 snowCap 的复用色对象（避免逐次 new THREE.Color） */
+  private snowCapColor = new THREE.Color('#ffffff');
 
   private ambient: THREE.AmbientLight;
   private sun: THREE.DirectionalLight;
@@ -109,12 +181,48 @@ export class VoxelWorld {
     uZebra: { value: 0 }, // city: zebra-crossing stripes
     uRoadCols: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color(), new THREE.Color()] },
     uCurbCols: { value: [new THREE.Color(), new THREE.Color(), new THREE.Color()] },
-    // 路灯在地面的光池：每盏灯的 (x, z, 强度)，由 update() 每帧写入
-    uLampX: { value: new Float32Array(LAMP_N) },
-    uLampZ: { value: new Float32Array(LAMP_N) },
-    uLampI: { value: new Float32Array(LAMP_N) },
+    // 路灯在地面的光池：每盏灯的 (x, z, 强度)，由 update() 每帧写入。
+    // 数组容量按 LAMP 上限预分配，shader 里的循环也按上限展开（多余槽强度恒 0）。
+    uLampX: { value: new Float32Array(MAX_LAMP_N) },
+    uLampZ: { value: new Float32Array(MAX_LAMP_N) },
+    uLampI: { value: new Float32Array(MAX_LAMP_N) },
     uLampCol: { value: new THREE.Color('#ffc98a') },
   };
+
+  // ---------------------------------------------------------------------------
+  // 场景元素「实际绘制数量」：由画质档位 densityScale 决定，切档时重算，
+  // 但 buffer 容量恒为 MAX_*（不重建）。所有 update() 循环与 slot() 都以这些字段为准。
+  // ---------------------------------------------------------------------------
+  private grassN = BASE_GRASS_N;
+  private reedN = BASE_REED_N;
+  private flowerN = BASE_FLOWER_N;
+  private treeN = BASE_TREE_N;
+  private rockN = BASE_ROCK_N;
+  private bushN = BASE_BUSH_N;
+  private mushN = BASE_MUSH_N;
+  private stumpN = BASE_STUMP_N;
+  private puddleN = BASE_PUDDLE_N;
+  private lampN = BASE_LAMP_N;
+  private cloudN = BASE_CLOUD_N;
+  private butterflyN = BASE_BUTTERFLY_N;
+  private buildN = BASE_BUILD_N;
+  private neonN = BASE_NEON_N;
+  private trafficN = BASE_TRAFFIC_N;
+  private palmN = BASE_PALM_N;
+  private umbrellaN = BASE_UMBRELLA_N;
+  private shellN = BASE_SHELL_N;
+  // P3 微细节层
+  private mossN = BASE_MOSS_N;
+  private tallGrassN = BASE_TALLGRASS_N;
+  private curbN = BASE_CURB_N;
+  private decalN = BASE_DECAL_N;
+  // P4 路旁设施
+  private benchN = BASE_BENCH_N;
+  private signN = BASE_SIGN_N;
+  private fenceN = BASE_FENCE_N;
+  /** 当前档位密度是否允许「新增细节层」（low 档为 false → 新增元素全部隐藏） */
+  private extras = true;
+
   private grass!: THREE.InstancedMesh;
   private reeds!: THREE.InstancedMesh;
   private stems!: THREE.InstancedMesh;
@@ -132,6 +240,28 @@ export class VoxelWorld {
   private stumps!: THREE.InstancedMesh;
   private puddles!: THREE.InstancedMesh;
   private puddleMat!: THREE.MeshStandardMaterial;
+  // P3 微细节层：贴地苔藓 / 高杆芒草 / 路缘石 / 路面贴花
+  private mosses!: THREE.InstancedMesh;
+  private tallGrass!: THREE.InstancedMesh;
+  private curbs!: THREE.InstancedMesh;
+  private decals!: THREE.InstancedMesh;
+  // P4 路旁设施：长椅 / 路牌 / 篱笆（全部 InstancedMesh）
+  private benches!: THREE.InstancedMesh;
+  private signs!: THREE.InstancedMesh;
+  private fences!: THREE.InstancedMesh;
+  // P4 远景剪影带：贴在山脊之外的水平长条（随距离极慢视差），把「世界有边界」补上
+  private farTreeLine!: THREE.Mesh;
+  private farTreeMats: THREE.MeshBasicMaterial[] = [];
+  // P5 雪面脚印：角色走过留在雪上的两行凹痕（纯静态实例，位置由 distance 决定）
+  private footprints!: THREE.InstancedMesh;
+  // P5 灯下微尘：每盏灯的锥体里缓慢浮动的细小尘埃点（Points，纯 GPU 驱动）
+  private dust!: THREE.Points;
+  private dustU!: {
+    uT: { value: number };
+    uOpacity: { value: number };
+    uColor: { value: THREE.Color };
+    uSpanY: { value: number };
+  };
   // GPU falling-particle systems (petals / leaves / snow / rain) — pure shader motion
   private petals!: THREE.Points;
   private leaves!: THREE.Points;
@@ -150,9 +280,9 @@ export class VoxelWorld {
   private wT = { petals: 0, leaves: 0, snow: 0, rain: 0, wind: 0, streaks: 0 }; // targets
   // city props
   private buildings!: THREE.InstancedMesh;
-  private buildSeed = new Float32Array(BUILD_N * 3);
+  private buildSeed = new Float32Array(MAX_BUILD_N * 3);
   private neon!: THREE.InstancedMesh;
-  private neonSeed = new Float32Array(NEON_N * 3);
+  private neonSeed = new Float32Array(MAX_NEON_N * 3);
   private traffic: THREE.Group[] = [];
   private trafficMats: THREE.MeshBasicMaterial[][] = []; // [light][r,y,g]
   // beach props
@@ -160,12 +290,12 @@ export class VoxelWorld {
   private seaU: any;
   private palms!: THREE.InstancedMesh;
   private fronds!: THREE.InstancedMesh;
-  private palmSeed = new Float32Array(PALM_N * 3);
+  private palmSeed = new Float32Array(MAX_PALM_N * 3);
   private umbrellas!: THREE.InstancedMesh;
-  private umbrellaSeed = new Float32Array(UMBRELLA_N * 3);
+  private umbrellaSeed = new Float32Array(MAX_UMBRELLA_N * 3);
   private shells!: THREE.InstancedMesh;
   private starfish!: THREE.InstancedMesh;
-  private shellSeed = new Float32Array(SHELL_N * 3);
+  private shellSeed = new Float32Array(MAX_SHELL_N * 3);
   private icicles!: THREE.InstancedMesh;
   private mapKind: 'nature' | 'city' | 'beach' = 'nature';
   private stars!: THREE.Points;
@@ -173,7 +303,7 @@ export class VoxelWorld {
   private fireflyUniforms: any;
   private clouds: THREE.Group[] = [];
   private cloudMats: THREE.MeshStandardMaterial[] = [];
-  private cloudSeed = new Float32Array(CLOUD_N * 4);
+  private cloudSeed = new Float32Array(MAX_CLOUD_N * 4);
   private lamps: Lamp[] = [];
   private lampGlowBoost = 1;
   private lampPoleMat!: THREE.MeshStandardMaterial;
@@ -200,15 +330,22 @@ export class VoxelWorld {
   private breaths: THREE.Sprite[] = []; // winter breath-mist puffs
   private frame = 0; // parity counter for staggered far-instance updates
 
-  private grassSeed = new Float32Array(GRASS_N * 3);
-  private reedSeed = new Float32Array(REED_N * 3);
-  private flowerSeed = new Float32Array(FLOWER_N * 3);
-  private treeSeed = new Float32Array(TREE_N * 3);
-  private rockSeed = new Float32Array(ROCK_N * 3);
-  private bushSeed = new Float32Array(BUSH_N * 3);
-  private mushSeed = new Float32Array(MUSH_N * 3);
-  private stumpSeed = new Float32Array(STUMP_N * 3);
-  private puddleSeed = new Float32Array(PUDDLE_N * 3);
+  private grassSeed = new Float32Array(MAX_GRASS_N * 3);
+  private reedSeed = new Float32Array(MAX_REED_N * 3);
+  private flowerSeed = new Float32Array(MAX_FLOWER_N * 3);
+  private treeSeed = new Float32Array(MAX_TREE_N * 3);
+  private rockSeed = new Float32Array(MAX_ROCK_N * 3);
+  private bushSeed = new Float32Array(MAX_BUSH_N * 3);
+  private mushSeed = new Float32Array(MAX_MUSH_N * 3);
+  private stumpSeed = new Float32Array(MAX_STUMP_N * 3);
+  private puddleSeed = new Float32Array(MAX_PUDDLE_N * 3);
+  private mossSeed = new Float32Array(MAX_MOSS_N * 3);
+  private tallGrassSeed = new Float32Array(MAX_TALLGRASS_N * 3);
+  private curbSeed = new Float32Array(MAX_CURB_N * 3);
+  private decalSeed = new Float32Array(MAX_DECAL_N * 3);
+  private benchSeed = new Float32Array(MAX_BENCH_N * 3);
+  private signSeed = new Float32Array(MAX_SIGN_N * 3);
+  private fenceSeed = new Float32Array(MAX_FENCE_N * 3);
 
   private distance = 0;
   private speed = 3.1;
@@ -222,6 +359,7 @@ export class VoxelWorld {
     this.canvas = canvas;
     // 画质档位必须在建 composer 之前确定（决定 MSAA samples）
     this.quality = resolveQuality(loadQualityChoice());
+    this.fogBreath = QUALITY_SETTINGS[this.quality].fogBreath;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     // ACES 色调映射：与 OutputPass 配合，把线性 HDR 结果映射到 sRGB 显示空间。
@@ -244,11 +382,14 @@ export class VoxelWorld {
 
     this.buildSky();
     this.buildMountains();
+    this.buildFarLine();
     this.buildRoad();
     this.buildVegetation();
     this.buildLamps();
     this.buildCharacter();
     this.buildContactShadows();
+    this.buildFootprints();
+    this.buildDust();
     this.buildClouds();
     this.buildFireflies();
     this.buildCelestial();
@@ -281,6 +422,8 @@ export class VoxelWorld {
 
     // 后处理链：RenderPass → UnrealBloom → OutputPass（sRGB 输出 + tone mapping 落地）。
     this.buildComposer();
+    // 初始档位的场景元素密度（含 low 档隐藏新增层）——先算，applyDecorDensity 依赖 this.extras
+    this.applyDensity();
     // 初始档位的装饰密度也要生效（默认 1.0 时无变化，低档位才会裁剪）
     this.applyDecorDensity();
     this.resize();
@@ -320,6 +463,11 @@ export class VoxelWorld {
     this.skyUniforms = {
       top: { value: new THREE.Color('#0a0a0a') },
       bottom: { value: new THREE.Color('#0a0a0a') },
+      // P6 地平线层：天空不再是「上→下」两段线性混合，而是「顶色 → 地平线雾色 → 底色」
+      // 三段。中间这一层（mistColor）是让天际线「有厚度」的关键——日出/黄昏时
+      // 地平线附近会堆一层暖雾，这是真实天空最强的辨识特征。
+      mist: { value: new THREE.Color('#0a0a0a') },
+      horizonSharp: { value: 0.75 },
     };
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide,
@@ -333,10 +481,15 @@ export class VoxelWorld {
       // ShaderMaterial 的 fragment 前缀里 three 已经注入过这些 *_pars_* 函数，
       // 重复 include 会导致着色器编译失败（实测报 "function already has a body"）。
       // 这里只需要在 gl_FragColor 赋值之后调用 *_fragment 段。
-      fragmentShader: `uniform vec3 top; uniform vec3 bottom; varying vec3 vP;
+      fragmentShader: `uniform vec3 top; uniform vec3 bottom; uniform vec3 mist; uniform float horizonSharp;
+        varying vec3 vP;
         void main(){
-          float h=normalize(vP).y*0.5+0.5;
-          gl_FragColor=vec4(mix(bottom,top,smoothstep(0.28,0.75,h)),1.0);
+          float h = normalize(vP).y * 0.5 + 0.5;
+          // 第一段：底色 → 地平线雾色（收在 h≈0.5 附近，即真正的地平线高度）
+          vec3 col = mix(bottom, mist, smoothstep(0.34, 0.52, h));
+          // 第二段：雾色 → 顶色，过渡锐度由 horizonSharp 控制（越大天际线越硬）
+          col = mix(col, top, smoothstep(0.52, 0.52 + horizonSharp * 0.36, h));
+          gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
@@ -419,6 +572,46 @@ export class VoxelWorld {
         this.mountains.push(m);
       }
     }
+  }
+
+  /**
+   * P4 远景剪影带 —— 山脊之外再压一层「树线 / 楼线」。
+   *
+   * 为什么放在山之后：山脊是纯几何剪影，与道路之间没有任何「中间景」，
+   * 视觉上纵深会断掉（山像是贴在天空上的贴纸）。补一条更远、更低的
+   * 锯齿剪影带，夹在山脊与雾之间，纵深立刻由「两层」变成「三层」。
+   *
+   * 实现与 mountains 同构（两个 tile 横向循环），但：
+   *   - Z 更远（-160），因此雾的衰减更重，更像「雾里的轮廓」
+   *   - 高度更低、齿更密更碎（模拟树冠／远处楼群的连续起伏）
+   *   - 视差系数极小（0.06），几乎不随行走移动，强化「极远」感
+   */
+  private buildFarLine() {
+    const W = 420;
+    const shape = new THREE.Shape();
+    shape.moveTo(0, -4);
+    const teeth = 96; // 齿足够密才能读出「树线」而不是第二座山
+    let x = 0;
+    for (let p = 0; p < teeth; p++) {
+      const w = (W / teeth) * (0.7 + hash(p * 3.7 + 9) * 0.6);
+      // 大部分齿很矮（~2-5），偶发高齿（~9-14）模拟大树/高楼
+      const spike = hash(p * 5.1 + 21) > 0.86;
+      const h = spike ? 9 + hash(p * 7.3) * 6 : 2 + hash(p * 9.1) * 3.2;
+      shape.lineTo(x + w * 0.4, h);
+      shape.lineTo(x + w, 0.4 + hash(p * 11.3 + 3) * 1.6);
+      x += w;
+    }
+    shape.lineTo(W + 60, -4);
+    shape.lineTo(W + 60, -8);
+    shape.lineTo(0, -8);
+    const geo = new THREE.ShapeGeometry(shape);
+    // 颜色由 setTheme 按主题写入（见 farTreeMats 使用处），初值给一个中性雾色
+    const mat = new THREE.MeshBasicMaterial({ color: '#2b3a55', fog: true, side: THREE.DoubleSide });
+    this.farTreeMats.push(mat);
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(0, -1, -160);
+    this.farTreeLine = m;
+    this.scene.add(m);
   }
 
   /** sun glow (spring) / big sunset disc (autumn) / moon (winter), follows the walker */
@@ -509,7 +702,7 @@ export class VoxelWorld {
   private buildButterflies() {
     const wingGeo = new THREE.PlaneGeometry(0.36, 0.27);
     wingGeo.translate(0.18, 0, 0); // hinge at inner edge
-    for (let i = 0; i < BUTTERFLY_N; i++) {
+    for (let i = 0; i < MAX_BUTTERFLY_N; i++) {
       const g = new THREE.Group();
       const mat = new THREE.MeshBasicMaterial({ color: '#ffd9ec', side: THREE.DoubleSide });
       const wl = new THREE.Mesh(wingGeo, mat);
@@ -574,8 +767,8 @@ export class VoxelWorld {
         `uniform float uPulse; uniform float uCharZ; uniform float uT; uniform float uSnow;
          uniform float uMoss; uniform float uLeaf; uniform float uZebra;
          uniform vec3 uRoadCols[4]; uniform vec3 uCurbCols[3];
-         uniform float uLampX[${LAMP_N}]; uniform float uLampZ[${LAMP_N}];
-         uniform float uLampI[${LAMP_N}]; uniform vec3 uLampCol;
+         uniform float uLampX[${MAX_LAMP_N}]; uniform float uLampZ[${MAX_LAMP_N}];
+         uniform float uLampI[${MAX_LAMP_N}]; uniform vec3 uLampCol;
          float frhash(float n){ return fract(sin(n*127.1+311.7)*43758.5453); }
          varying float vWZ; varying float vWX; varying float vCurb; varying float vJit;\n` +
         shader.fragmentShader.replace(
@@ -624,11 +817,13 @@ export class VoxelWorld {
              // gentle light breathing + bass glow around the walker
              float breathe = 0.96 + 0.05 * sin(uT * 0.8 + row * 0.7);
              float nearGlow = uPulse * 0.22 * exp(-abs(vWZ - uCharZ) * 0.12);
-             // 涟漪：从角色脚下向外扩散的同心环（3 环错相位），随节拍增亮。
+             // 涟漪：从角色脚下向外扩散的同心环，随节拍增亮。
              // 用 -vWZ（前进轴）与 vWX 的径向距离，环带用 sin 相位差做软边。
+             // P5：3 环 → 5 环（环数必须与 shader 常量一致；5 环在低档也便宜，
+             // 因为它只是每片元多 2 次 sin，而涟漪本身已是「最便宜的高频细节」）。
              float dChar = length(vec2(vWX * 0.85, (vWZ - uCharZ) * 0.5));
              float ripple = 0.0;
-             for (int k = 0; k < 3; k++) {
+             for (int k = 0; k < 5; k++) {
                float ph = uT * 1.15 - float(k) * 0.72;
                float ring = sin(dChar * 1.35 - ph * 6.2831);
                // 软环：只保留波峰附近，且随半径衰减
@@ -638,7 +833,7 @@ export class VoxelWorld {
              // 路灯光池：逐盏累加椭圆软光斑（世界坐标距离），让路面真正「被灯照到」。
              // 只有近处几盏对当前片元有贡献，衰减很快所以在 shader 里全遍历 8 盏也很便宜。
              float lampAcc = 0.0;
-             for (int li = 0; li < ${LAMP_N}; li++) {
+             for (int li = 0; li < ${MAX_LAMP_N}; li++) {
                vec2 d = vec2((vWX - uLampX[li]) * 0.62, (vWZ - uLampZ[li]) * 0.95);
                float r2 = dot(d, d);
                lampAcc += uLampI[li] / (1.0 + r2 * 0.9);
@@ -670,9 +865,9 @@ export class VoxelWorld {
       flatShading: true,
       side: THREE.DoubleSide,
     });
-    this.grass = new THREE.InstancedMesh(grassGeo, grassMat, GRASS_N);
+    this.grass = new THREE.InstancedMesh(grassGeo, grassMat, MAX_GRASS_N);
     this.grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < GRASS_N * 3; i++) this.grassSeed[i] = hash(i * 7.1);
+    for (let i = 0; i < MAX_GRASS_N * 3; i++) this.grassSeed[i] = hash(i * 7.1);
     this.scene.add(this.grass);
 
     // reeds — taller, narrower crossed blades with a seed-head tip
@@ -688,26 +883,26 @@ export class VoxelWorld {
     this.reeds = new THREE.InstancedMesh(
       reedGeo,
       new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true, side: THREE.DoubleSide }),
-      REED_N
+      MAX_REED_N
     );
     this.reeds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < REED_N * 3; i++) this.reedSeed[i] = hash(i * 3.9 + 40);
+    for (let i = 0; i < MAX_REED_N * 3; i++) this.reedSeed[i] = hash(i * 3.9 + 40);
     this.scene.add(this.reeds);
 
     // flowers — thin stem + faceted head
     this.stems = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.025, 0.04, 0.55, 4),
       new THREE.MeshStandardMaterial({ color: '#5e8f5a', roughness: 0.9, flatShading: true }),
-      FLOWER_N
+      MAX_FLOWER_N
     );
     this.heads = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(0.15, 0),
       new THREE.MeshStandardMaterial({ roughness: 0.7, emissiveIntensity: 0.25, flatShading: true }),
-      FLOWER_N
+      MAX_FLOWER_N
     );
     this.stems.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.heads.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < FLOWER_N * 3; i++) this.flowerSeed[i] = hash(i * 13.3);
+    for (let i = 0; i < MAX_FLOWER_N * 3; i++) this.flowerSeed[i] = hash(i * 13.3);
     this.scene.add(this.stems, this.heads);
 
     // five-petal blossoms — 5 flattened spheres around a center nub (merged)
@@ -725,7 +920,7 @@ export class VoxelWorld {
     this.petalHeads = new THREE.InstancedMesh(
       mergeGeometries(petalParts)!,
       new THREE.MeshStandardMaterial({ roughness: 0.65, emissiveIntensity: 0.2, flatShading: true }),
-      FLOWER_N
+      MAX_FLOWER_N
     );
     this.petalHeads.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     // bell flowers — small inverted cone skirt + tiny clapper (indexed geometries)
@@ -736,7 +931,7 @@ export class VoxelWorld {
     this.bellHeads = new THREE.InstancedMesh(
       mergeGeometries([bellCone, clapper])!,
       new THREE.MeshStandardMaterial({ roughness: 0.65, emissiveIntensity: 0.25, flatShading: true, side: THREE.DoubleSide }),
-      FLOWER_N
+      MAX_FLOWER_N
     );
     this.bellHeads.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(this.petalHeads, this.bellHeads);
@@ -745,22 +940,22 @@ export class VoxelWorld {
     this.trunks = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.16, 0.32, 2.4, 5),
       flat(0.95),
-      TREE_N
+      MAX_TREE_N
     );
     this.canopyLow = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1.15, 0),
       flat(0.85),
-      TREE_N * 2
+      MAX_TREE_N * 2
     );
     this.canopyTop = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(0.72, 0),
       flat(0.85),
-      TREE_N
+      MAX_TREE_N
     );
     this.trunks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.canopyLow.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.canopyTop.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < TREE_N * 3; i++) this.treeSeed[i] = hash(i * 5.9);
+    for (let i = 0; i < MAX_TREE_N * 3; i++) this.treeSeed[i] = hash(i * 5.9);
     this.scene.add(this.trunks, this.canopyLow, this.canopyTop);
 
     // fir/pine variant — three stacked upright cones (proper triangular silhouette)
@@ -770,7 +965,7 @@ export class VoxelWorld {
     pineMid.translate(0, 3.35, 0);
     const pineTip = new THREE.ConeGeometry(0.5, 1.2, 6);
     pineTip.translate(0, 4.2, 0);
-    this.pines = new THREE.InstancedMesh(mergeGeometries([pineLow, pineMid, pineTip])!, flat(0.85), TREE_N);
+    this.pines = new THREE.InstancedMesh(mergeGeometries([pineLow, pineMid, pineTip])!, flat(0.85), MAX_TREE_N);
     this.pines.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(this.pines);
 
@@ -778,18 +973,18 @@ export class VoxelWorld {
     this.snowCaps = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(0.85, 0),
       new THREE.MeshStandardMaterial({ color: '#eaf2ff', roughness: 0.6, flatShading: true }),
-      TREE_N
+      MAX_TREE_N
     );
     this.snowCaps.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(this.snowCaps);
 
     // rocks & bushes — squashed icosahedra scattered by the roadside
-    this.rocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.42, 0), flat(0.95), ROCK_N);
-    this.bushes = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.5, 0), flat(0.9), BUSH_N);
+    this.rocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.42, 0), flat(0.95), MAX_ROCK_N);
+    this.bushes = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.5, 0), flat(0.9), MAX_BUSH_N);
     this.rocks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bushes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < ROCK_N * 3; i++) this.rockSeed[i] = hash(i * 11.7);
-    for (let i = 0; i < BUSH_N * 3; i++) this.bushSeed[i] = hash(i * 17.9);
+    for (let i = 0; i < MAX_ROCK_N * 3; i++) this.rockSeed[i] = hash(i * 11.7);
+    for (let i = 0; i < MAX_BUSH_N * 3; i++) this.bushSeed[i] = hash(i * 17.9);
     this.scene.add(this.rocks, this.bushes);
 
     // mushrooms — stem + dome cap merged; vertex colors keep stem pale vs cap
@@ -802,16 +997,16 @@ export class VoxelWorld {
     this.mushrooms = new THREE.InstancedMesh(
       mergeGeometries([mStem, mCap])!,
       new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true, vertexColors: true }),
-      MUSH_N
+      MAX_MUSH_N
     );
     this.mushrooms.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < MUSH_N * 3; i++) this.mushSeed[i] = hash(i * 21.3 + 7);
+    for (let i = 0; i < MAX_MUSH_N * 3; i++) this.mushSeed[i] = hash(i * 21.3 + 7);
     this.scene.add(this.mushrooms);
 
     // stumps & fallen logs — one cylinder geometry, per-instance pose picks the kind
-    this.stumps = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.26, 1, 6), flat(0.95), STUMP_N);
+    this.stumps = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.26, 1, 6), flat(0.95), MAX_STUMP_N);
     this.stumps.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < STUMP_N * 3; i++) this.stumpSeed[i] = hash(i * 27.7 + 3);
+    for (let i = 0; i < MAX_STUMP_N * 3; i++) this.stumpSeed[i] = hash(i * 27.7 + 3);
     this.scene.add(this.stumps);
 
     // puddles — dark glossy little planes that catch the light under bloom
@@ -821,10 +1016,143 @@ export class VoxelWorld {
       metalness: 0.65,
       flatShading: true,
     });
-    this.puddles = new THREE.InstancedMesh(new THREE.CircleGeometry(0.55, 7), this.puddleMat, PUDDLE_N);
+    this.puddles = new THREE.InstancedMesh(new THREE.CircleGeometry(0.55, 7), this.puddleMat, MAX_PUDDLE_N);
     this.puddles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < PUDDLE_N * 3; i++) this.puddleSeed[i] = hash(i * 33.1 + 11);
+    for (let i = 0; i < MAX_PUDDLE_N * 3; i++) this.puddleSeed[i] = hash(i * 33.1 + 11);
     this.scene.add(this.puddles);
+
+    // ---------------------------------------------------------------------
+    // P3 微细节层 —— 用户反馈「场景细节还是不够」的真正解法：
+    // 不加新的元素「种类」，而是给已有元素加「底座与边缘」，
+    // 让每一处植被/路面在近景都有一圈可看的碎细节。
+    // 全部随 densityScale 缩放；low 档（extras=false）整体隐藏。
+    // ---------------------------------------------------------------------
+
+    // L0 贴地苔藓/地衣 —— 极扁的多面体圆片，压在草丛根部。
+    // 因为旋转被压到 X 轴接近 0，正面几乎贴着地面，只在地面轮廓上留一点起伏。
+    this.mosses = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(0.34, 0),
+      new THREE.MeshStandardMaterial({ roughness: 0.98, flatShading: true }),
+      MAX_MOSS_N
+    );
+    this.mosses.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_MOSS_N * 3; i++) this.mossSeed[i] = hash(i * 41.3 + 5);
+    this.scene.add(this.mosses);
+
+    // L3 高杆芒草 —— 4 片十字长叶，比 reeds 更高更细，只在远侧轮廓带出现，
+    // 用来在天际线下方拉出一条「草尖毛边」，这是 low-poly 场景最缺的层次。
+    const tBlade = new THREE.PlaneGeometry(0.11, 1.75);
+    tBlade.translate(0, 0.875, 0);
+    const t2 = tBlade.clone();
+    t2.rotateY(Math.PI / 3);
+    const t3 = tBlade.clone();
+    t3.rotateY((Math.PI / 3) * 2);
+    // 略微内收的第二层，制造「一丛多叶」的厚度
+    const t4 = tBlade.clone();
+    t4.scale(0.72, 0.86, 1);
+    t4.rotateY(Math.PI / 6);
+    this.tallGrass = new THREE.InstancedMesh(
+      mergeGeometries([tBlade, t2, t3, t4])!,
+      new THREE.MeshStandardMaterial({ roughness: 0.92, flatShading: true, side: THREE.DoubleSide }),
+      MAX_TALLGRASS_N
+    );
+    this.tallGrass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_TALLGRASS_N * 3; i++) this.tallGrassSeed[i] = hash(i * 47.9 + 13);
+    this.scene.add(this.tallGrass);
+
+    // 路缘石 —— 低矮长条石块沿道路两侧等距排布，给无限路面一个「路肩」参照物。
+    // 有它之后，路面不再是一条飘在空中的带子，景深参照明显增强。
+    // 高度压到 0.16 并半埋（y=0.07 → 约一半在地面以下），避免读成「浮在空中的小板」。
+    const curbGeo = new THREE.BoxGeometry(0.3, 0.16, 1.0);
+    // 容量 = 单侧上限 × 2（左右各一排），与 canopyLow 的 MAX_TREE_N*2 同一套思路
+    this.curbs = new THREE.InstancedMesh(curbGeo, flat(0.95), MAX_CURB_N * 2);
+    this.curbs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_CURB_N * 3; i++) this.curbSeed[i] = hash(i * 53.1 + 17);
+    this.scene.add(this.curbs);
+
+    // 路面贴花 —— 贴地的极扁圆片，模拟磨损 / 补丁 / 干涸水渍。
+    // ★ 视觉教训（两轮）：
+    //   1) opacity 0.5 + MeshStandardMaterial：被阳光照亮后比路面更亮 → 读成「地上的纸片」。
+    //   2) 即便压到 0.14，只要是 Standard 材质，直射光仍可能让它亮过阴影中的路面。
+    // 结论：磨损在物理上只能是「暗于路面」的叠加。因此改用 MeshBasicMaterial（不受光）
+    // + 极暗固定色 + MultiplyBlending —— 数学上只可能压暗，不可能变亮。
+    // 冷中性灰（而非暖褐）：与蓝调雪面/夜色路面混合时只产生「变暗的湿痕」，
+    // 不会污染出橄榄黄——暖褐在冷色路面上会被读成「另一种材质」。
+    this.decals = new THREE.InstancedMesh(
+      new THREE.CircleGeometry(0.7, 6),
+      new THREE.MeshBasicMaterial({
+        color: '#5c6068',
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        // three 的硬性要求：MultiplyBlending 必须配 premultipliedAlpha，
+        // 否则每个 draw call 都打一条 WebGLState 警告（实测会刷满 console）。
+        premultipliedAlpha: true,
+        blending: THREE.MultiplyBlending,
+      }),
+      MAX_DECAL_N
+    );
+    this.decals.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_DECAL_N * 3; i++) this.decalSeed[i] = hash(i * 59.7 + 19);
+    this.scene.add(this.decals);
+
+    // ---------------------------------------------------------------------
+    // P4 路旁设施 —— 长椅 / 路牌 / 篱笆。
+    // 三者都用「草地色 + 木色」的低饱和材质，保证与 P3 植被层同属一个色彩家族。
+    // ---------------------------------------------------------------------
+
+    // 长椅：座面 + 靠背 + 两条腿，合并成单个几何，靠实例旋转朝向道路。
+    const seat = new THREE.BoxGeometry(1.5, 0.09, 0.45);
+    seat.translate(0, 0.44, 0);
+    const back = new THREE.BoxGeometry(1.5, 0.42, 0.07);
+    back.translate(0, 0.66, -0.2);
+    const legA = new THREE.BoxGeometry(0.09, 0.44, 0.4);
+    legA.translate(-0.62, 0.22, 0);
+    const legB = legA.clone();
+    legB.translate(1.24, 0, 0);
+    this.benches = new THREE.InstancedMesh(
+      mergeGeometries([seat, back, legA, legB])!,
+      flat(0.9),
+      MAX_BENCH_N
+    );
+    this.benches.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_BENCH_N * 3; i++) this.benchSeed[i] = hash(i * 61.7 + 23);
+    this.scene.add(this.benches);
+
+    // 路牌：细杆 + 方板（板身用亮色 instanceColor，杆身随材质走暗色）。
+    const post = new THREE.CylinderGeometry(0.035, 0.045, 1.5, 5);
+    post.translate(0, 0.75, 0);
+    const panel = new THREE.BoxGeometry(0.52, 0.34, 0.05);
+    panel.translate(0, 1.42, 0);
+    this.signs = new THREE.InstancedMesh(
+      mergeGeometries([post, panel])!,
+      new THREE.MeshStandardMaterial({ roughness: 0.75, metalness: 0.15, flatShading: true }),
+      MAX_SIGN_N
+    );
+    this.signs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_SIGN_N * 3; i++) this.signSeed[i] = hash(i * 67.3 + 29);
+    this.scene.add(this.signs);
+
+    // 篱笆：两段短柱 + 两根横杆，构成一个「一段」模块，环槽复用。
+    // ★ 视觉教训：初版柱高 0.72、间距几乎首尾相接时，两侧会连成一道「围栏墙」，
+    // 把近景挤成一圈畜栏，反而压过了植被。现在整体压矮到 ~0.52 并只保留稀疏分段，
+    // 定位在「隐约的田埂边界」而非「围栏」。
+    const fp1 = new THREE.BoxGeometry(0.07, 0.52, 0.07);
+    fp1.translate(-0.55, 0.26, 0);
+    const fp2 = fp1.clone();
+    fp2.translate(1.1, 0, 0);
+    const fr1 = new THREE.BoxGeometry(1.2, 0.05, 0.05);
+    fr1.translate(0, 0.42, 0);
+    const fr2 = fr1.clone();
+    fr2.translate(0, -0.22, 0);
+    this.fences = new THREE.InstancedMesh(
+      mergeGeometries([fp1, fp2, fr1, fr2])!,
+      flat(0.92),
+      MAX_FENCE_N * 2
+    );
+    this.fences.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < MAX_FENCE_N * 3; i++) this.fenceSeed[i] = hash(i * 71.9 + 31);
+    this.scene.add(this.fences);
 
     // Collapse every instance to zero scale: InstancedMesh buffers start as
     // identity matrices at the origin — without this, variant slots that are
@@ -835,6 +1163,8 @@ export class VoxelWorld {
       this.grass, this.reeds, this.stems, this.heads, this.petalHeads, this.bellHeads,
       this.trunks, this.canopyLow, this.canopyTop, this.pines, this.snowCaps,
       this.rocks, this.bushes, this.mushrooms, this.stumps, this.puddles,
+      this.mosses, this.tallGrass, this.curbs, this.decals,
+      this.benches, this.signs, this.fences,
     ]) {
       for (let i = 0; i < mesh.count; i++) mesh.setMatrixAt(i, zero);
       mesh.instanceMatrix.needsUpdate = true;
@@ -859,7 +1189,7 @@ export class VoxelWorld {
       flatShading: true,
     });
     const glowTex = makeGlowTexture();
-    for (let i = 0; i < LAMP_N; i++) {
+    for (let i = 0; i < MAX_LAMP_N; i++) {
       const side = i % 2 === 0 ? 1 : -1;
       const group = new THREE.Group();
 
@@ -915,6 +1245,21 @@ export class VoxelWorld {
       glowOuter.scale.set(3.4, 3.4, 1);
       glowOuter.position.set(headX, LAMP_H - 0.3, 0);
       group.add(glowOuter);
+      // P6 第三层光晕 glowFar：更大更淡的雾状外层（半径 8），把灯「焊」进空气里。
+      // 低档位由 applyDensity/setQuality 按 lampLayers 关闭，避免中等档多付这笔填充。
+      const glowFar = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: glowTex,
+          color: '#ffe9c4',
+          transparent: true,
+          opacity: 0.05,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      glowFar.scale.set(8, 8, 1);
+      glowFar.position.set(headX, LAMP_H - 0.32, 0);
+      group.add(glowFar);
 
       // soft light cone: radial edge falloff (vUv.x wraps around the cone surface)
       const coneMat = new THREE.ShaderMaterial({
@@ -963,14 +1308,14 @@ export class VoxelWorld {
       group.add(spot);
 
       this.scene.add(group);
-      this.lamps.push({ group, glow, glowOuter, spot, cone, side, slot: i });
+      this.lamps.push({ group, glow, glowOuter, glowFar, spot, cone, side, slot: i });
     }
   }
 
   /** distant low-poly clouds drifting very slowly, positions are pure f(t, distance) */
   private buildClouds() {
     const puffGeo = new THREE.IcosahedronGeometry(1, 0);
-    for (let i = 0; i < CLOUD_N; i++) {
+    for (let i = 0; i < MAX_CLOUD_N; i++) {
       // per-cloud material so opacity can vary per layer (front bright / back hazy)
       const mat = new THREE.MeshStandardMaterial({
         color: '#ffffff',
@@ -1001,9 +1346,9 @@ export class VoxelWorld {
   /** fireflies / floating glow motes — fully GPU-animated points, zero per-frame CPU */
   private buildFireflies() {
     const geo = new THREE.BufferGeometry();
-    const pos = new Float32Array(FIREFLY_N * 3);
-    const phase = new Float32Array(FIREFLY_N);
-    for (let i = 0; i < FIREFLY_N; i++) {
+    const pos = new Float32Array(MAX_FIREFLY_N * 3);
+    const phase = new Float32Array(MAX_FIREFLY_N);
+    for (let i = 0; i < MAX_FIREFLY_N; i++) {
       pos[i * 3] = (hash(i * 2.3) - 0.5) * 30;
       pos[i * 3 + 1] = 0.4 + hash(i * 4.9) * 4.2;
       pos[i * 3 + 2] = 6 - hash(i * 6.1) * 70; // local band around the walker
@@ -1079,9 +1424,118 @@ export class VoxelWorld {
       mesh.setMatrixAt(i, dummy.matrix);
     }
     mesh.instanceMatrix.needsUpdate = true;
-    mesh.visible = QUALITY_SETTINGS[this.quality].contactShadows;
+    // 双重条件：contactShadows（档位总开关）+ shadowQuality>0（阴影质量分档，0 = 不要阴影）
+    mesh.visible = QUALITY_SETTINGS[this.quality].contactShadows && QUALITY_SETTINGS[this.quality].shadowQuality > 0;
     this.contactShadows = mesh;
     this.scene.add(mesh);
+  }
+
+  /**
+   * P5 雪面脚印 —— 角色身后两行交替的浅凹痕。
+   *
+   * 为什么值得做：无限雪地上「走过」这件事本身没有留下任何痕迹，
+   * 走着走着会觉得世界是「贴片」而不是「地面」。脚印把「经过」变成可读的历史。
+   *
+   * 实现要点：
+   *   - 位置是 `distance` 的纯函数（`slot()` 同款环槽），所以不做状态累积，
+   *     长时间运行不会漂移、不会内存增长；
+   *   - 左右脚交替：`k % 2` 决定横向偏移 ±0.22；
+   *   - 用一盏「极暗 + 极低不透明度」的软边圆片贴在雪面极薄之上（y=0.013）。
+   */
+  private buildFootprints() {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+      map: makeGlowTexture(),
+      color: '#8fa8d8', // 雪面阴影偏蓝，才像「压出的坑」而不是「贴上去的黑点」
+      transparent: true,
+      opacity: 0.26,
+      depthWrite: false,
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, FOOTPRINT_N * 2);
+    mesh.frustumCulled = false;
+    for (let i = 0; i < FOOTPRINT_N * 2; i++) {
+      dummy.position.set(0, -10, 0);
+      dummy.scale.setScalar(0);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.visible = false; // 仅雪天/雪主题由 update 打开
+    this.footprints = mesh;
+    this.scene.add(mesh);
+  }
+
+  /**
+   * P5 灯下微尘 —— 每盏灯的光锥内缓慢漂浮的细小尘埃。
+   *
+   * 为什么值得做：路灯的光锥目前是「干净的几何体」，现实里灯光锥里一定有浮尘，
+   * 这是让「灯光质感」从塑料变成可信的关键一笔（比把锥体做得更亮更有效）。
+   *
+   * 纯 GPU：位置在顶点着色器里由 uT + 每顶点种子算出，CPU 每帧只写 1 个 uniform。
+   * 尘埃锚点跟随角色（整片随角色移动），保证相机附近总有尘埃可看。
+   */
+  private buildDust() {
+    const N = 240;
+    const pos = new Float32Array(N * 3);
+    const seed = new Float32Array(N * 2);
+    for (let i = 0; i < N; i++) {
+      pos[i * 3] = 0;
+      pos[i * 3 + 1] = 0;
+      pos[i * 3 + 2] = 0;
+      seed[i * 2] = hash(i * 2.3 + 5);
+      seed[i * 2 + 1] = hash(i * 7.9 + 11);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 2));
+    this.dustU = {
+      uT: { value: 0 },
+      uOpacity: { value: 0 },
+      uColor: { value: new THREE.Color('#ffe9c4') },
+      uSpanY: { value: 4.2 },
+    };
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: this.dustU,
+      vertexShader: `
+        attribute vec2 aSeed;
+        uniform float uT; uniform float uSpanY;
+        varying float vA;
+        void main(){
+          // 每个粒子在「路两侧灯柱区」的柱体内绕灯缓慢上浮，到达顶部后回到底部（不累积状态）。
+          // x 偏向两侧（±5.6 是灯柱位置），y 覆盖灯高（0~4.2），使尘埃聚集在灯附近而非全屏乱飞。
+          float sp = 0.06 + aSeed.y * 0.12;
+          float y = mod(aSeed.x * uSpanY + uT * sp, uSpanY);
+          float a = aSeed.x * 6.2831 + uT * 0.5;
+          float r = 0.5 + aSeed.y * 1.6;
+          float sideSign = aSeed.y > 0.5 ? 1.0 : -1.0;
+          vec3 p = vec3(sideSign * 5.4 + cos(a) * r, y, sin(a * 1.3) * r);
+          vA = (1.0 - y / uSpanY) * (0.35 + aSeed.y * 0.65);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_PointSize = min(26.0 / max(0.4, -mv.z), 5.0) * (0.5 + aSeed.y);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 uColor; uniform float uOpacity;
+        varying float vA;
+        void main(){
+          vec2 q = gl_PointCoord - 0.5;
+          float d = length(q);
+          if (d > 0.5) discard;
+          float a = smoothstep(0.5, 0.0, d) * vA * uOpacity;
+          vec3 col = uColor * (0.7 + 0.6 * (1.0 - d * 2.0));
+          gl_FragColor = vec4(col, a);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+    });
+    this.dust = new THREE.Points(geo, mat);
+    this.dust.frustumCulled = false;
+    this.dustU.uOpacity.value = 0.5;
+    this.scene.add(this.dust);
   }
 
   private buildCharacter() {
@@ -1280,19 +1734,21 @@ export class VoxelWorld {
       roughness: 0.85,
       flatShading: true,
     });
-    this.buildings = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, BUILD_N);
+    this.buildings = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, MAX_BUILD_N);
     this.buildings.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < BUILD_N * 3; i++) this.buildSeed[i] = hash(i * 6.7 + 21);
+    for (let i = 0; i < MAX_BUILD_N * 3; i++) this.buildSeed[i] = hash(i * 6.7 + 21);
     this.scene.add(this.buildings);
 
-    // neon signs — small bright boxes floating on the inner building faces
+    // neon signs — small bright boxes floating on the inner building faces.
+    // P6：材质基色设为白（不参与配色），真正的色相由 setTheme 逐实例写入
+    // neonHue（每个主题一组霓虹色）→ 霓虹灯牌不再是一片死白。
     this.neon = new THREE.InstancedMesh(
       new THREE.BoxGeometry(0.18, 0.7, 0.1),
       new THREE.MeshBasicMaterial({ color: '#ffffff' }),
-      NEON_N
+      MAX_NEON_N
     );
     this.neon.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < NEON_N * 3; i++) this.neonSeed[i] = hash(i * 9.1 + 47);
+    for (let i = 0; i < MAX_NEON_N * 3; i++) this.neonSeed[i] = hash(i * 9.1 + 47);
     this.scene.add(this.neon);
 
     // traffic lights — pole + head box + 3 lamps, ring slots like street lamps
@@ -1301,7 +1757,7 @@ export class VoxelWorld {
     const lampGeo = new THREE.SphereGeometry(0.09, 8, 6);
     const poleMat = new THREE.MeshStandardMaterial({ color: '#2a2e3c', roughness: 0.6, metalness: 0.4, flatShading: true });
     const headMat = new THREE.MeshStandardMaterial({ color: '#1c2030', roughness: 0.7, flatShading: true });
-    for (let i = 0; i < TRAFFIC_N; i++) {
+    for (let i = 0; i < MAX_TRAFFIC_N; i++) {
       const g = new THREE.Group();
       const pole = new THREE.Mesh(poleGeo, poleMat);
       pole.position.y = 1.5;
@@ -1334,6 +1790,12 @@ export class VoxelWorld {
       uFoam: { value: new THREE.Color('#f4feff') },
       uFogColor: { value: new THREE.Color('#a8d8e0') },
       uFogDensity: { value: 0.014 },
+      // P6 反射带：太阳/月亮在海面上的垂直亮带（sun path）。
+      // uReflect = 强度（主题 seaReflect），uReflectCol = 光源色（celestial 色）。
+      // 它在视觉上是「海面把天空反射回来」的唯一线索——没有它，海就是一块蓝布。
+      uReflect: { value: 0.55 },
+      uReflectCol: { value: new THREE.Color('#fff3c8') },
+      uReflectX: { value: 0.5 },
     };
     const seaMat = new THREE.ShaderMaterial({
       uniforms: this.seaU,
@@ -1348,6 +1810,7 @@ export class VoxelWorld {
       fragmentShader: `
         uniform float uT; uniform float uDist; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uFoam;
         uniform vec3 uFogColor; uniform float uFogDensity;
+        uniform float uReflect; uniform vec3 uReflectCol; uniform float uReflectX;
         // 同上：pars 由 three 自动注入，此处只需在输出后调用 fragment 段
         varying vec2 vUv; varying float vFogDepth;
         void main(){
@@ -1361,6 +1824,14 @@ export class VoxelWorld {
           col = mix(col, uFoam, clamp(foam * 0.8 + shore, 0.0, 1.0));
           // sun sparkle
           col += 0.08 * sin(vUv.y * 300.0 + uT * 2.0) * sin(vUv.x * 220.0 - uT * 1.4);
+          // P6 反射带：以 uReflectX 为中心的高斯亮带，横向随波光抖动 → 像太阳在水面的倒影路径。
+          // 越靠岸（vUv.x 小）越窄越亮，越靠地平线越宽越淡，符合透视下光带的收敛规律。
+          float bandW = mix(0.022, 0.14, vUv.x);
+          float dx = (vUv.y - uReflectX) + sin(vUv.y * 90.0 + uT * 1.6) * 0.012;
+          float band = exp(-(dx * dx) / (bandW * bandW));
+          // 断开成「闪光点」而非连续亮条：用高频 sin 调制成碎光
+          float glint = 0.55 + 0.45 * sin(vUv.y * 210.0 - uT * 3.1);
+          col += uReflectCol * band * glint * uReflect * (1.0 - vUv.x * 0.5);
           // FogExp2 —— 与 scene.fog 同参数，避免远端海面与雾色地面/山剪影衔接生硬
           float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vFogDepth * vFogDepth);
           col = mix(col, uFogColor, clamp(fogFactor, 0.0, 1.0));
@@ -1388,7 +1859,7 @@ export class VoxelWorld {
     this.palms = new THREE.InstancedMesh(
       trunkGeo,
       new THREE.MeshStandardMaterial({ color: '#8a6f4e', roughness: 0.95, flatShading: true }),
-      PALM_N
+      MAX_PALM_N
     );
     this.palms.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const frondParts: THREE.BufferGeometry[] = [];
@@ -1408,10 +1879,10 @@ export class VoxelWorld {
     this.fronds = new THREE.InstancedMesh(
       mergeGeometries(frondParts)!,
       new THREE.MeshStandardMaterial({ color: '#4a9a5e', roughness: 0.9, flatShading: true, side: THREE.DoubleSide }),
-      PALM_N
+      MAX_PALM_N
     );
     this.fronds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < PALM_N * 3; i++) this.palmSeed[i] = hash(i * 4.3 + 71);
+    for (let i = 0; i < MAX_PALM_N * 3; i++) this.palmSeed[i] = hash(i * 4.3 + 71);
     this.scene.add(this.palms, this.fronds);
 
     // beach umbrellas — striped cone canopy + pole (vertex colors)
@@ -1424,10 +1895,10 @@ export class VoxelWorld {
     this.umbrellas = new THREE.InstancedMesh(
       mergeGeometries([uPole, uTop])!,
       new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true, vertexColors: true }),
-      UMBRELLA_N
+      MAX_UMBRELLA_N
     );
     this.umbrellas.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < UMBRELLA_N * 3; i++) this.umbrellaSeed[i] = hash(i * 7.9 + 33);
+    for (let i = 0; i < MAX_UMBRELLA_N * 3; i++) this.umbrellaSeed[i] = hash(i * 7.9 + 33);
     this.scene.add(this.umbrellas);
 
     // shells & starfish — small blobs / 5-arm stars on the sand
@@ -1444,16 +1915,16 @@ export class VoxelWorld {
     this.shells = new THREE.InstancedMesh(
       shellGeo,
       new THREE.MeshStandardMaterial({ roughness: 0.7, flatShading: true }),
-      SHELL_N
+      MAX_SHELL_N
     );
     this.shells.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.starfish = new THREE.InstancedMesh(
       starGeo,
       new THREE.MeshStandardMaterial({ roughness: 0.7, flatShading: true }),
-      SHELL_N
+      MAX_SHELL_N
     );
     this.starfish.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    for (let i = 0; i < SHELL_N * 3; i++) this.shellSeed[i] = hash(i * 11.3 + 91);
+    for (let i = 0; i < MAX_SHELL_N * 3; i++) this.shellSeed[i] = hash(i * 11.3 + 91);
     this.scene.add(this.shells, this.starfish);
   }
 
@@ -1517,6 +1988,7 @@ export class VoxelWorld {
     if (level === this.quality) return;
     this.quality = level;
     const qs = QUALITY_SETTINGS[level];
+    this.fogBreath = qs.fogBreath;
 
     // 与构造函数共用同一实现；重建后 bloom 是全新实例，需重设参数
     this.buildComposer();
@@ -1526,8 +1998,10 @@ export class VoxelWorld {
     }
     this.resize();
 
-    if (this.contactShadows) this.contactShadows.visible = qs.contactShadows;
+    if (this.contactShadows) this.contactShadows.visible = qs.contactShadows && qs.shadowQuality > 0;
 
+    // 场景元素密度随档位重算（不重建几何）——先算，applyDecorDensity 依赖 this.extras
+    this.applyDensity();
     // 装饰密度变化需重建相关实例系统
     this.applyDecorDensity();
   }
@@ -1553,11 +2027,147 @@ export class VoxelWorld {
     };
     limit(this.fireflies);
     limit(this.streaks);
+    // 星空：按档位 setDrawRange（600 / 1200 / 2000）——用 starCount 而非 decorDensity，
+    // 因为星星在夜空是主视觉，不应该与「装饰密度」共用一个乘数导致高质量档也偏稀。
+    const sc = QUALITY_SETTINGS[this.quality].starCount;
+    const starAttr = this.stars.geometry.getAttribute('position');
+    if (starAttr) this.stars.geometry.setDrawRange(0, Math.min(starAttr.count, sc));
     // 蝴蝶是可交互的 Group，逐个开关（数量少，开销可忽略）
-    const shown = Math.max(1, Math.round(this.butterflies.length * Math.min(1, d)));
+    // ambienceExtras=false（low 档）时只保留 1 只；否则按 decorDensity 缩放
+    const shown = this.extras
+      ? Math.max(1, Math.round(this.butterflies.length * Math.min(1, d)))
+      : Math.min(1, this.butterflies.length);
     this.butterflies.forEach((g, i) => {
       g.visible = i < shown;
     });
+  }
+
+  /**
+   * 按当前档位重算「场景元素实际绘制数量」。
+   *
+   * ★ 与 applyDecorDensity 的分工：
+   *   - applyDecorDensity：只调 Points 的 setDrawRange + 蝴蝶/额外层可见性（轻量）
+   *   - applyDensity（本方法）：重算 grass/reed/.../shell 的 effective count，
+   *     并同步 InstancedMesh 的 count（.count 可运行时改，不用重建 buffer）。
+   *
+   * 关键：InstancedMesh.count 可以直接赋值来「少画」尾部实例——three 按 count 遍历，
+   * 不读 instanceMatrix 之外的资源，因此切档零重建、零卡顿。
+   * 但 count 只能「减到不超过容量」；容量恒为 MAX_*，所以任何档位都能安全下调。
+   */
+  private applyDensity() {
+    const s = QUALITY_SETTINGS[this.quality].densityScale;
+    const eff = (base: number, max: number) =>
+      Math.min(max, Math.max(1, Math.round(base * Math.max(MIN_DENSITY, s))));
+    this.grassN = eff(BASE_GRASS_N, MAX_GRASS_N);
+    this.reedN = eff(BASE_REED_N, MAX_REED_N);
+    this.flowerN = eff(BASE_FLOWER_N, MAX_FLOWER_N);
+    this.treeN = eff(BASE_TREE_N, MAX_TREE_N);
+    this.rockN = eff(BASE_ROCK_N, MAX_ROCK_N);
+    this.bushN = eff(BASE_BUSH_N, MAX_BUSH_N);
+    this.mushN = eff(BASE_MUSH_N, MAX_MUSH_N);
+    this.stumpN = eff(BASE_STUMP_N, MAX_STUMP_N);
+    this.puddleN = eff(BASE_PUDDLE_N, MAX_PUDDLE_N);
+    this.lampN = eff(BASE_LAMP_N, MAX_LAMP_N);
+    this.cloudN = eff(BASE_CLOUD_N, MAX_CLOUD_N);
+    this.butterflyN = eff(BASE_BUTTERFLY_N, MAX_BUTTERFLY_N);
+    this.buildN = eff(BASE_BUILD_N, MAX_BUILD_N);
+    this.neonN = eff(BASE_NEON_N, MAX_NEON_N);
+    this.trafficN = eff(BASE_TRAFFIC_N, MAX_TRAFFIC_N);
+    this.palmN = eff(BASE_PALM_N, MAX_PALM_N);
+    this.umbrellaN = eff(BASE_UMBRELLA_N, MAX_UMBRELLA_N);
+    this.shellN = eff(BASE_SHELL_N, MAX_SHELL_N);
+    this.mossN = eff(BASE_MOSS_N, MAX_MOSS_N);
+    this.tallGrassN = eff(BASE_TALLGRASS_N, MAX_TALLGRASS_N);
+    this.curbN = eff(BASE_CURB_N, MAX_CURB_N);
+    this.decalN = eff(BASE_DECAL_N, MAX_DECAL_N);
+    this.benchN = eff(BASE_BENCH_N, MAX_BENCH_N);
+    this.signN = eff(BASE_SIGN_N, MAX_SIGN_N);
+    this.fenceN = eff(BASE_FENCE_N, MAX_FENCE_N);
+    this.extras = QUALITY_SETTINGS[this.quality].ambienceExtras;
+
+    // 同步 InstancedMesh 的绘制数量（只为已有实例设置；未构建的跳过）
+    const setCount = (m: THREE.InstancedMesh | undefined, n: number) => {
+      if (m) m.count = n;
+    };
+    setCount(this.grass, this.grassN);
+    setCount(this.reeds, this.reedN);
+    setCount(this.stems, this.flowerN);
+    setCount(this.heads, this.flowerN);
+    setCount(this.petalHeads, this.flowerN);
+    setCount(this.bellHeads, this.flowerN);
+    setCount(this.trunks, this.treeN);
+    setCount(this.canopyLow, this.treeN * 2);
+    setCount(this.canopyTop, this.treeN);
+    setCount(this.pines, this.treeN);
+    setCount(this.snowCaps, this.treeN);
+    setCount(this.rocks, this.rockN);
+    setCount(this.bushes, this.bushN);
+    setCount(this.mushrooms, this.mushN);
+    setCount(this.stumps, this.stumpN);
+    setCount(this.puddles, this.puddleN);
+    setCount(this.buildings, this.buildN);
+    setCount(this.neon, this.neonN);
+    setCount(this.palms, this.palmN);
+    setCount(this.fronds, this.palmN);
+    setCount(this.umbrellas, this.umbrellaN);
+    setCount(this.shells, this.shellN);
+    setCount(this.starfish, this.shellN);
+    // P3 微细节层：low 档（extras=false）整体不画
+    setCount(this.mosses, this.extras ? this.mossN : 0);
+    setCount(this.tallGrass, this.extras ? this.tallGrassN : 0);
+    setCount(this.curbs, this.extras ? this.curbN * 2 : 0);
+    setCount(this.decals, this.extras ? this.decalN : 0);
+    setCount(this.benches, this.extras ? this.benchN : 0);
+    setCount(this.signs, this.extras ? this.signN : 0);
+    setCount(this.fences, this.extras ? this.fenceN * 2 : 0);
+    // 红绿灯：Group 数组，可见性 = 「主题族允许」&&「档位允许」，见 refreshPropVisibility()
+    this.traffic.forEach((g, i) => {
+      g.userData.byDensity = i < this.trafficN;
+    });
+    // 云：同上
+    this.clouds.forEach((g, i) => {
+      g.userData.byDensity = i < this.cloudN;
+    });
+    // 路灯：多出的灯柱整体隐藏（含光晕/光锥），并按新数量刷新光池数组
+    // lampLayers 控制光晕层数：1=仅内核 / 2=+中层 / 3=+外层雾晕（high）
+    const lampLayers = QUALITY_SETTINGS[this.quality].lampLayers;
+    const volumetric = QUALITY_SETTINGS[this.quality].volumetricLight;
+    this.lamps.forEach((l, i) => {
+      const on = i < this.lampN;
+      l.group.visible = on;
+      l.glowOuter.visible = lampLayers >= 2;
+      l.glowFar.visible = lampLayers >= 3;
+      // 体积光锥（cone）是填充大户：只在高档开启，中低档完全关掉
+      l.cone.visible = volumetric;
+      // godrayLayers：地面光池贴片（spot）的档位开关。0 = 完全不要光池（最低档），
+      // ≥1 = 开启。它与 cone 是两个独立的「光柱体」元素，分开控制才能做到
+      // 「低档连光池都不画」而「中档有光池但无锥体」。
+      l.spot.visible = QUALITY_SETTINGS[this.quality].godrayLayers >= 1;
+      if (!on) this.roadU.uLampI.value[l.slot] = 0;
+    });
+    for (let i = this.lampN; i < MAX_LAMP_N; i++) this.roadU.uLampI.value[i] = 0;
+
+    this.refreshPropVisibility();
+  }
+
+  /**
+   * 统一刷新「分组数组型道具」的可见性。
+   *
+   * ★ 为什么需要这一层：traffic / clouds 这类道具的可见性同时受两个正交开关控制——
+   *   - 主题族开关：如红绿灯只在 city 出现（由 setTheme 决定）
+   *   - 档位开关：如 low 档只保留一部分（由 applyDensity 决定）
+   * 若两处各自直接写 visible，后调用者会覆盖前者（例如 setTheme 会把低档裁掉的红绿灯
+   * 重新点亮，且它们位置是上一轮的陈旧值 → 出现「卡在路边的幽灵红绿灯」）。
+   * 因此两个开关分别写入 userData，再由本方法合成最终 visible。
+   */
+  private refreshPropVisibility() {
+    for (const g of this.traffic) {
+      g.visible = !!g.userData.familyOn && !!g.userData.byDensity;
+    }
+    for (const g of this.clouds) {
+      // 云在所有主题都出现，familyOn 缺省视为 true
+      g.visible = g.userData.familyOn !== false && g.userData.byDensity !== false;
+    }
   }
 
   /** recompute intensity targets from the effective weather mode */
@@ -1580,19 +2190,32 @@ export class VoxelWorld {
     this.scene.fog = new THREE.FogExp2(theme.fog, theme.fogDensity);
     // 海面为自定义 shader，需手动同步雾参数（scene.fog 对其无效）
     this.seaU?.uFogColor.value.set(theme.fog);
-    if (this.seaU) this.seaU.uFogDensity.value = theme.fogDensity;
+    if (this.seaU) {
+      this.seaU.uFogDensity.value = theme.fogDensity;
+      // P6 反射带参数：强度取主题 seaReflect，颜色取天体色，位置跟着天体横移
+      this.seaU.uReflect.value = theme.seaReflect ?? 0.5;
+      this.seaU.uReflectCol.value.set(theme.celestialColor);
+      // celestialX 是 -0.6~0.6 的横移系数 → 映射到海面 uv.y 的 0~1
+      this.seaU.uReflectX.value = 0.5 + theme.celestialX * 0.42;
+    }
     (this.ground.material as THREE.MeshStandardMaterial).color.set(theme.ground);
     this.skyUniforms.top.value.set(theme.skyTop);
     this.skyUniforms.bottom.value.set(theme.skyBottom);
+    // P6 地平线雾色：默认取主题 fog（保证与地面/山剪影的雾同色 → 天地无缝），
+    // 主题可用 mistColor 覆写成更暖/更冷的独立色（如黄昏的橙雾）。
+    this.skyUniforms.mist.value.set(theme.mistColor ?? theme.fog);
+    // 锐度：夜景（星空/极光）用更硬的过渡让星空「压」在地平线上；日景更柔
+    this.skyUniforms.horizonSharp.value = theme.night ? 1.05 : 0.7;
     this.ambient.color.set(theme.ambient);
     this.ambient.intensity = theme.ambientIntensity;
     this.sun.color.set(theme.sunColor);
     this.sun.intensity = theme.sunIntensity;
     this.sun.position.set(...theme.sunPosition);
-    // 半球光：天空侧取主题天顶色，地面侧取雾色（近似环境反射），强度随昼夜
+    // 半球光：天空侧取主题天顶色；地面侧取 ambientGround（新增，独立于雾色，做环境光上下分层），
+    // 未填则退化为雾色（旧行为）。强度由 hemiIntensity 显式化（未填则 night?0.34:0.5）。
     this.hemi.color.set(theme.skyTop);
-    this.hemi.groundColor.set(theme.fog);
-    this.hemi.intensity = theme.night ? 0.34 : 0.5;
+    this.hemi.groundColor.set(theme.ambientGround ?? theme.fog);
+    this.hemi.intensity = theme.hemiIntensity ?? (theme.night ? 0.34 : 0.5);
     this.bloom.strength = theme.bloom;
     this.bloom.radius = theme.bloomRadius * QUALITY_SETTINGS[this.quality].bloomRadiusScale;
     this.renderer.toneMappingExposure = theme.exposure;
@@ -1654,14 +2277,15 @@ export class VoxelWorld {
     this.roadU.uMoss.value = theme.id === 'spring' ? 1 : 0;
     this.roadU.uLeaf.value = theme.id === 'autumn' ? 1 : 0;
     this.roadU.uZebra.value = theme.mapKind === 'city' ? 1 : 0;
-    this.lampGlowBoost = night ? 1.5 : 1;
+    // 夜间灯光聚焦：在原有 1.5 倍基础上再乘主题 lampFocus（夜都/冬夜灯光更集中）
+    this.lampGlowBoost = night ? 1.5 * (theme.lampFocus ?? 1.2) : 1;
     if (!night) {
       // collapse caps once; update() skips writing them outside winter
       dummy.position.set(0, -10, 0);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.setScalar(0);
       dummy.updateMatrix();
-      for (let i = 0; i < TREE_N; i++) this.snowCaps.setMatrixAt(i, dummy.matrix);
+      for (let i = 0; i < MAX_TREE_N; i++) this.snowCaps.setMatrixAt(i, dummy.matrix);
       this.snowCaps.instanceMatrix.needsUpdate = true;
     } else {
       (this.snowCaps.material as THREE.MeshStandardMaterial).color.set(theme.snowCap);
@@ -1687,8 +2311,23 @@ export class VoxelWorld {
     for (const l of this.lamps) {
       l.glow.material.color.set(theme.lampGlow);
       l.glowOuter.material.color.set(theme.lampGlow);
+      // 外层雾晕用 godrayColor（若主题给了）→ 让「灯把空气染成什么色」与主题一致
+      l.glowFar.material.color.set(theme.godrayColor ?? theme.lampGlow);
       l.spot.material.color.set(theme.lampGlow);
       ((l.cone.material as THREE.ShaderMaterial).uniforms.color.value as THREE.Color).set(theme.coneColor);
+    }
+
+    // P6 霓虹上色：逐实例取 neonHue（未定义时回退 lampGlow），并做轻微「亮度呼吸」偏移，
+    // 让相邻灯牌颜色错开、不呈现同一批次的机械感。夜晚更强，白天压暗（白昼霓虹本就该弱）。
+    {
+      const hues = theme.neonHue ?? [theme.lampGlow];
+      const neonGain = theme.night ? 1 : 0.55;
+      for (let i = 0; i < MAX_NEON_N; i++) {
+        const c = tmpColor.set(hues[(hash(i * 4.7 + 31) * hues.length) | 0]);
+        const b = 0.75 + hash(i * 9.3 + 5) * 0.35; // 亮度错落
+        this.neon.setColorAt(i, c.multiplyScalar(b * neonGain));
+      }
+      this.neon.instanceColor!.needsUpdate = true;
     }
 
     // GPU particle palettes (petals from the theme's flower palette, leaves/snow fixed-ish)
@@ -1718,13 +2357,28 @@ export class VoxelWorld {
     this.grass.visible = !isCity;
     this.bushes.visible = !isCity;
     this.rocks.visible = !isCity;
+    // P3：苔藓/高杆芒草属于自然植被层，城市主题不出现；路缘石/路面贴花依附于路面，全主题都有
+    this.mosses.visible = !isCity;
+    this.tallGrass.visible = !isCity;
+    this.curbs.visible = true;
+    this.decals.visible = true;
+    // P4：长椅/路牌全主题有（城市与自然都可读）；篱笆只属于自然/海滩的野地边界
+    this.benches.visible = true;
+    this.signs.visible = true;
+    this.fences.visible = !isCity;
     this.snowCaps.visible = isNature && theme.id === 'winter';
     for (const m of this.mountains) m.visible = isNature;
+    // 远景剪影带：自然主题=树线，城市=楼线，海滩=稀疏椰林线；统一用一个几何，
+    // 只换颜色与纵向缩放，避免为每个主题各建一套几何。
+    this.farTreeLine.visible = !isBeach;
+    this.farTreeLine.scale.set(isCity ? 1.0 : 1.2, isCity ? 1.35 : 1.0, 1);
     this.buildings.visible = this.neon.visible = isCity;
-    for (const g of this.traffic) g.visible = isCity;
+    for (const g of this.traffic) g.userData.familyOn = isCity;
     this.sea.visible = this.palms.visible = this.fronds.visible = isBeach;
     this.umbrellas.visible = this.shells.visible = this.starfish.visible = isBeach;
     this.icicles.visible = theme.id === 'winter';
+    // 合成「主题族开关 + 档位开关」（避免 setTheme 覆盖低档位裁剪结果）
+    this.refreshPropVisibility();
 
     // weather: 'auto' follows the new theme's default
     this.applyWeatherTargets();
@@ -1739,16 +2393,16 @@ export class VoxelWorld {
     }
 
     // static instance colors
-    for (let i = 0; i < GRASS_N; i++)
+    for (let i = 0; i < MAX_GRASS_N; i++)
       this.grass.setColorAt(i, tmpColor.set(theme.foliage[(hash(i * 4.1) * theme.foliage.length) | 0]));
     this.grass.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < REED_N; i++)
+    for (let i = 0; i < MAX_REED_N; i++)
       this.reeds.setColorAt(
         i,
         tmpColor.set(theme.foliage[(hash(i * 2.7 + 9) * theme.foliage.length) | 0]).lerp(new THREE.Color(theme.curb[0]), 0.3)
       );
     this.reeds.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < FLOWER_N; i++) {
+    for (let i = 0; i < MAX_FLOWER_N; i++) {
       const c = theme.flowerPetals[(hash(i * 6.3) * theme.flowerPetals.length) | 0];
       this.heads.setColorAt(i, tmpColor.set(c));
       this.petalHeads.setColorAt(i, tmpColor.set(theme.flowerPetals[(hash(i * 4.9 + 2) * theme.flowerPetals.length) | 0]));
@@ -1757,57 +2411,129 @@ export class VoxelWorld {
     this.heads.instanceColor!.needsUpdate = true;
     this.petalHeads.instanceColor!.needsUpdate = true;
     this.bellHeads.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < TREE_N; i++)
-      this.trunks.setColorAt(i, tmpColor.set(theme.trunk));
+    // 夜间提亮统一系数（nightLift）：原先各道具硬编码 0.3/0.35/0.4/0.45 导致提亮不一致，
+    // 现在统一读主题 nightLift，同主题所有道具的夜间提亮台阶一致。
+    const lift = night ? theme.nightLift ?? 0.35 : 0;
+    this.snowCapColor.set(theme.snowCap);
+    for (let i = 0; i < MAX_TREE_N; i++)
+      this.trunks.setColorAt(i, tmpColor.set(theme.trunk).lerp(this.snowCapColor, lift * 0.5));
     this.trunks.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < TREE_N * 2; i++)
+    for (let i = 0; i < MAX_TREE_N * 2; i++)
       this.canopyLow.setColorAt(
         i,
-        tmpColor
-          .set(theme.foliage[(hash(i * 9.7) * theme.foliage.length) | 0])
-          .lerp(new THREE.Color(theme.snowCap), night ? 0.3 : 0)
+        tmpColor.set(theme.foliage[(hash(i * 9.7) * theme.foliage.length) | 0]).lerp(this.snowCapColor, lift)
       );
     this.canopyLow.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < TREE_N; i++) {
+    for (let i = 0; i < MAX_TREE_N; i++) {
       this.canopyTop.setColorAt(
         i,
-        tmpColor
-          .set(theme.foliage[(hash(i * 12.3) * theme.foliage.length) | 0])
-          .lerp(new THREE.Color(theme.snowCap), night ? 0.35 : 0)
+        tmpColor.set(theme.foliage[(hash(i * 12.3) * theme.foliage.length) | 0]).lerp(this.snowCapColor, lift)
       );
-      // firs keep a cooler, darker tone; snow-dusted in winter
-      const pc = tmpColor.set(theme.foliage[i % theme.foliage.length]).multiplyScalar(0.75);
-      if (night) pc.lerp(new THREE.Color(theme.snowCap), 0.4);
-      this.pines.setColorAt(i, pc);
+      // firs keep a cooler, darker tone; snow-dusted at night
+      this.pines.setColorAt(
+        i,
+        tmpColor.set(theme.foliage[i % theme.foliage.length]).multiplyScalar(0.75).lerp(this.snowCapColor, lift)
+      );
     }
     this.canopyTop.instanceColor!.needsUpdate = true;
     this.pines.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < ROCK_N; i++)
+    for (let i = 0; i < MAX_ROCK_N; i++)
       this.rocks.setColorAt(
         i,
-        tmpColor
-          .set(theme.rock[(hash(i * 8.3) * theme.rock.length) | 0])
-          .lerp(new THREE.Color(theme.snowCap), night ? 0.45 : 0)
+        tmpColor.set(theme.rock[(hash(i * 8.3) * theme.rock.length) | 0]).lerp(this.snowCapColor, lift * 1.15)
       );
     this.rocks.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < BUSH_N; i++)
+    for (let i = 0; i < MAX_BUSH_N; i++)
       this.bushes.setColorAt(
         i,
-        tmpColor
-          .set(theme.foliage[(hash(i * 15.1) * theme.foliage.length) | 0])
-          .lerp(new THREE.Color(theme.snowCap), night ? 0.35 : 0)
+        tmpColor.set(theme.foliage[(hash(i * 15.1) * theme.foliage.length) | 0]).lerp(this.snowCapColor, lift)
       );
     this.bushes.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < MUSH_N; i++)
+    for (let i = 0; i < MAX_MUSH_N; i++)
       this.mushrooms.setColorAt(
         i,
         tmpColor.set(theme.flowerPetals[(hash(i * 10.7 + 5) * theme.flowerPetals.length) | 0])
       );
     this.mushrooms.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < STUMP_N; i++) this.stumps.setColorAt(i, tmpColor.set(theme.trunk));
+    for (let i = 0; i < MAX_STUMP_N; i++) this.stumps.setColorAt(i, tmpColor.set(theme.trunk));
     this.stumps.instanceColor!.needsUpdate = true;
-    for (let i = 0; i < PUDDLE_N; i++) this.puddles.setColorAt(i, tmpColor.set('#ffffff'));
+    for (let i = 0; i < MAX_PUDDLE_N; i++) this.puddles.setColorAt(i, tmpColor.set('#ffffff'));
     this.puddles.instanceColor!.needsUpdate = true;
+
+    // P3 微细节层配色（全部沿用主题既有色板，避免引入新色相破坏「材质与配色协调」）
+    // 苔藓：取植被色再压暗 25%，形成「草叶亮 / 苔藓暗」的层次；夜间同 lift 提亮
+    for (let i = 0; i < MAX_MOSS_N; i++)
+      this.mosses.setColorAt(
+        i,
+        tmpColor
+          .set(theme.foliage[(hash(i * 23.9 + 3) * theme.foliage.length) | 0])
+          .multiplyScalar(0.75)
+          .lerp(this.snowCapColor, lift * 0.8)
+      );
+    this.mosses.instanceColor!.needsUpdate = true;
+    // 高杆芒草：植被色向路缘（curb）拉 40%，比 reeds 更「干」，在前景与草皮区分开
+    for (let i = 0; i < MAX_TALLGRASS_N; i++)
+      this.tallGrass.setColorAt(
+        i,
+        tmpColor
+          .set(theme.foliage[(hash(i * 29.1 + 7) * theme.foliage.length) | 0])
+          .lerp(new THREE.Color(theme.curb[0]), 0.4)
+          .lerp(this.snowCapColor, lift * 0.9)
+      );
+    this.tallGrass.instanceColor!.needsUpdate = true;
+    // 路缘石：用主题 rock 色板（石材语义），亮度略压，避免抢主体
+    for (let i = 0; i < MAX_CURB_N * 2; i++)
+      this.curbs.setColorAt(
+        i,
+        tmpColor.set(theme.rock[(hash(i * 31.7 + 11) * theme.rock.length) | 0]).multiplyScalar(0.88).lerp(this.snowCapColor, lift * 0.6)
+      );
+    this.curbs.instanceColor!.needsUpdate = true;
+    // 路面贴花：Multiply 混合下，instanceColor 直接作为「乘数」——
+    // 越接近 1 越不可见，越暗则压得越重。这里给 0.72~0.9 的随机暗度，
+    // 叠加材质自身 opacity 0.5，得到「若隐若现的暗渍」，且**不可能亮于路面**。
+    // 同时按主题的 roadBase 明度微调（雪白/沙色路面少压一点，深色路面多压一点）。
+    {
+      const roadDarkBias = theme.night ? 0.78 : 0.85;
+      for (let i = 0; i < MAX_DECAL_N; i++) {
+        const v = (0.72 + hash(i * 37.3 + 13) * 0.18) * roadDarkBias;
+        this.decals.setColorAt(i, tmpColor.setRGB(v, v, v));
+      }
+      this.decals.instanceColor!.needsUpdate = true;
+    }
+
+    // 远景剪影带：由天空底色与雾色混合，并适当提亮，使其「像被大气层托亮」。
+    // 比 mountainMats 更亮一档，形成「远 → 更远」的明度递进（近实远虚）。
+    {
+      const skyTop = theme.skyTop, skyBot = theme.skyBottom;
+      const fm = this.farTreeMats[0];
+      if (fm)
+        fm.color
+          .set(skyBot)
+          .lerp(new THREE.Color(skyTop), 0.25)
+          .lerp(new THREE.Color(theme.fog), 0.5)
+          .multiplyScalar(theme.night ? 0.75 : 0.92);
+    }
+
+    // P4 路旁设施配色：木/金属语义，全部取自主题既有色板
+    // 长椅：木色 = trunk 色（去掉夜提亮，保留木头本色）
+    for (let i = 0; i < MAX_BENCH_N; i++)
+      this.benches.setColorAt(i, tmpColor.set(theme.trunk).multiplyScalar(0.92));
+    this.benches.instanceColor!.needsUpdate = true;
+    // 路牌：面板用主题 curb 亮色（**不**再向纯白插值 0.28 —— 那会让面板在雾里
+    // 读成「悬空的纸片」），只在夜间保留一点点提亮作为反光。
+    for (let i = 0; i < MAX_SIGN_N; i++)
+      this.signs.setColorAt(
+        i,
+        tmpColor
+          .set(theme.curb[(hash(i * 43.1 + 17) * theme.curb.length) | 0])
+          .multiplyScalar(0.78)
+          .lerp(this.snowCapColor, lift * 0.25)
+      );
+    this.signs.instanceColor!.needsUpdate = true;
+    // 篱笆：与 trunk 同族但明显更灰更旧（乘 0.62），退到背景层次，不抢植被
+    for (let i = 0; i < MAX_FENCE_N * 2; i++)
+      this.fences.setColorAt(i, tmpColor.set(theme.trunk).multiplyScalar(0.62).lerp(this.snowCapColor, lift * 0.3));
+    this.fences.instanceColor!.needsUpdate = true;
   }
 
   /**
@@ -1921,19 +2647,35 @@ export class VoxelWorld {
     this.skyDome.position.z = charZ;
     this.stars.position.z = charZ;
 
+    // 雾密度呼吸：夜雾更「沉」，日雾更轻。low 档关闭（fogBreath=false）以省常数级开销。
+    // 海面是自定义 shader，scene.fog 对其无效，必须同步 uFogDensity，否则海天雾不一致。
+    if (this.fogBreath) {
+      const amp = theme.fogBreathAmp ?? 0.06;
+      const spd = theme.fogBreathSpeed ?? 0.06;
+      const fd = theme.fogDensity * (1 + Math.sin(t * spd) * amp);
+      (this.scene.fog as THREE.FogExp2).density = fd;
+      if (this.seaU) this.seaU.uFogDensity.value = fd;
+    }
+
     // grass — continuous ring slots, random side/offset/size per cycle
     if (this.grass.visible)
-    for (let i = 0; i < GRASS_N; i++) {
+    for (let i = 0; i < this.grassN; i++) {
       const s0 = this.grassSeed[i * 3], s2 = this.grassSeed[i * 3 + 2];
-      const sl = this.slot(i, GRASS_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.grassN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue; // far tufts update every other frame
       const side = hash2(cyc, i * 1.3) > 0.5 ? 1 : -1;
       const rx = hash2(cyc * 3.1, i);
       const sway = Math.sin(t * 1.8 + s2 * 12 + z * 0.4) * (0.12 + bands.mid * 0.35);
+      // P5 踩草倒伏：角色前后 3.5m 内、靠近路肩（|x| < 7.5）的草被「压向路外」。
+      // 采用「离角色越近倒得越多」的连续权重，而不是硬阈值——硬阈值会出现
+      // 一撮草突然弹起的台阶感。注意倒伏方向是**远离角色**（-side），即向外倾倒。
+      const dz = z - charZ;
+      const near = this.extras ? Math.max(0, 1 - Math.abs(dz) / 3.5) : 0;
+      const lean = near * near * 0.5 * (side > 0 ? -1 : 1);
       const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
       dummy.position.set(side * (5.4 + rx * 2.6), 0, z); // strictly off the roadway (|x| > 5.2)
-      dummy.rotation.set((rx - 0.5) * 0.3, s2 * 6.3 + cyc, sway * side);
+      dummy.rotation.set((rx - 0.5) * 0.3, s2 * 6.3 + cyc, sway * side + lean);
       dummy.scale.set(gf * (0.8 + s0 * 0.9), (0.7 + s0 * 1.2) * gf, gf);
       dummy.updateMatrix();
       this.grass.setMatrixAt(i, dummy.matrix);
@@ -1942,9 +2684,9 @@ export class VoxelWorld {
 
     // reeds — same ring slots, taller sway, sparser
     if (this.reeds.visible)
-    for (let i = 0; i < REED_N; i++) {
+    for (let i = 0; i < this.reedN; i++) {
       const s0 = this.reedSeed[i * 3], s2 = this.reedSeed[i * 3 + 2];
-      const sl = this.slot(i, REED_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.reedN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 1.3, i * 2.1) > 0.5 ? 1 : -1;
@@ -1959,11 +2701,178 @@ export class VoxelWorld {
     }
     this.reeds.instanceMatrix.needsUpdate = true;
 
+    // ------------------------------------------------------------------
+    // P3 微细节层 —— 静态摆放，只有「极轻微」的气流扰动（避免整体死板）。
+    // 全部以 densityScale 为数量、genFade 为淡出、slot() 为环槽复用。
+    // ------------------------------------------------------------------
+
+    // L0 苔藓片：批量多、分布最宽、几乎贴地，铺在草丛与路肩之间的过渡带。
+    if (this.mosses.visible)
+    for (let i = 0; i < this.mossN; i++) {
+      const s0 = this.mossSeed[i * 3], s1 = this.mossSeed[i * 3 + 1], s2 = this.mossSeed[i * 3 + 2];
+      const sl = this.slot(i, this.mossN, SPAN, s0, this.slotOut);
+      const z = sl.z, cyc = sl.cycle;
+      if (z < charZ - 48 && ((frame + i) & 1) === 1) continue;
+      const side = hash2(cyc * 2.7, i * 3.3) > 0.5 ? 1 : -1;
+      // 苔藓比草更靠近路肩（5.0 ~ 9.5），是「人工路面 → 自然草皮」的过渡
+      const x = side * (5.0 + hash2(cyc, i * 5.5) * 4.5);
+      const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+      dummy.position.set(x, 0.015, z);
+      dummy.rotation.set(0, s1 * 6.3 + cyc, (s0 - 0.5) * 0.14);
+      // 极扁：Y 压到 0.06~0.13，X/Z 反而铺开到 1.2~2.4 倍
+      dummy.scale.set(gf * (1.2 + s0 * 1.2), gf * (0.06 + s1 * 0.07), gf * (1.2 + s2 * 1.2));
+      dummy.updateMatrix();
+      this.mosses.setMatrixAt(i, dummy.matrix);
+    }
+    this.mosses.instanceMatrix.needsUpdate = true;
+
+    // L3 高杆芒草：数量中等，站得最高，只在远侧（|x| 7~13）出现，
+    // 让地平线下方始终有一条毛茸茸的草尖带 —— 这是拉深度的关键一层。
+    if (this.tallGrass.visible)
+    for (let i = 0; i < this.tallGrassN; i++) {
+      const s0 = this.tallGrassSeed[i * 3], s2 = this.tallGrassSeed[i * 3 + 2];
+      const sl = this.slot(i, this.tallGrassN, SPAN, s0, this.slotOut);
+      const z = sl.z, cyc = sl.cycle;
+      if (z < charZ - 60 && ((frame + i) & 1) === 1) continue; // 最远层，更新更省
+      const side = hash2(cyc * 3.9, i * 1.7) > 0.5 ? 1 : -1;
+      const rx = hash2(cyc * 2.1, i + 41);
+      const sway = Math.sin(t * 1.05 + s2 * 8 + z * 0.22) * (0.1 + bands.mid * 0.26);
+      const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+      dummy.position.set(side * (7.0 + rx * 6.0), 0, z);
+      dummy.rotation.set((rx - 0.5) * 0.18, s2 * 6.3 + cyc, sway * side);
+      dummy.scale.set(gf * (0.85 + s0 * 0.5), (0.85 + s0 * 0.6) * gf, gf);
+      dummy.updateMatrix();
+      this.tallGrass.setMatrixAt(i, dummy.matrix);
+    }
+    this.tallGrass.instanceMatrix.needsUpdate = true;
+
+    // 路缘石：沿两侧等距硬排（类似灯柱的固定节奏），缩放不随脉动，只有 genFade 淡出。
+    // 位置严格夹在路面外沿（|x| = 5.15），与道路 shader 的 curb 色带对齐。
+    if (this.curbs.visible) {
+      const ccs = SPAN / this.curbN;
+      for (let i = 0; i < this.curbN; i++) {
+        const s1 = this.curbSeed[i * 3 + 1], s2 = this.curbSeed[i * 3 + 2];
+        for (let side = -1; side <= 1; side += 2) {
+          const k = i * 2 + (side > 0 ? 1 : 0);
+          // 用同一套 slot 节奏，但在 z 上做半个间隔的交错，避免左右完全对称的机械感
+          const sl = this.slot(k, this.curbN * 2, SPAN, s1, this.slotOut);
+          const z = sl.z + (side > 0 ? ccs * 0.5 : 0);
+          const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+          if (gf <= 0.001) {
+            dummy.scale.set(0, 0, 0);
+          } else {
+            dummy.position.set(side * 5.15, 0.055, z);
+            dummy.rotation.set(0, (s1 - 0.5) * 0.1, 0);
+            // 长度随机，偶尔缺一块（s2 < 0.12）→ 像被踩缺的路肩
+            const gap = s2 < 0.12 ? 0 : 1;
+            dummy.scale.set(gf * gap, gf, gf * (0.8 + s2 * 0.6));
+          }
+          dummy.updateMatrix();
+          this.curbs.setMatrixAt(k, dummy.matrix);
+        }
+      }
+      this.curbs.instanceMatrix.needsUpdate = true;
+    }
+
+    // 路面贴花：贴地圆片，缓慢横向漂移（视觉上是「路面在动」而非贴花在动），
+    // 用极低 opacity + 随机大小制造路面磨损/补丁的斑驳感。
+    if (this.decals.visible)
+    for (let i = 0; i < this.decalN; i++) {
+      const s0 = this.decalSeed[i * 3], s1 = this.decalSeed[i * 3 + 1], s2 = this.decalSeed[i * 3 + 2];
+      const sl = this.slot(i, this.decalN, SPAN, s0, this.slotOut);
+      const z = sl.z, cyc = sl.cycle;
+      if (z < charZ - 40 && ((frame + i) & 1) === 1) continue;
+      const gf = this.genFade(z, charZ - SPAN, charZ + 2, s0);
+      // 横向压在路面宽度内（±4.8），纵向随机旋转避免看出是圆
+      dummy.position.set((hash2(cyc * 4.3, i * 6.1) - 0.5) * 9.6, 0.012, z);
+      dummy.rotation.set(-Math.PI / 2, 0, s1 * 6.3 + cyc * 2.4);
+      // 尺寸也收小（0.45~1.3 倍），大片贴花更容易读成「异物」
+      const ds = gf * (0.45 + s2 * 0.85);
+      dummy.scale.set(ds * (0.6 + s0 * 1.4), ds, ds);
+      dummy.updateMatrix();
+      this.decals.setMatrixAt(i, dummy.matrix);
+    }
+    this.decals.instanceMatrix.needsUpdate = true;
+
+    // ------------------------------------------------------------------
+    // P4 路旁设施 —— 位置固定、姿态固定（椅子不会随风摇摆），只保留 genFade 与
+    // 极微小的「坐面落雪/落尘」反应，避免出现「活物」的错觉。
+    // ------------------------------------------------------------------
+
+    // 长椅：朝向道路（rotation.y = ±π/2 让椅背朝外），间隔较大，成组出现
+    if (this.benches.visible)
+    for (let i = 0; i < this.benchN; i++) {
+      const s0 = this.benchSeed[i * 3], s1 = this.benchSeed[i * 3 + 1], s2 = this.benchSeed[i * 3 + 2];
+      const sl = this.slot(i, this.benchN, SPAN, s0, this.slotOut);
+      const z = sl.z;
+      const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+      if (gf <= 0.001) {
+        dummy.scale.set(0, 0, 0);
+      } else {
+        const side = s1 > 0.5 ? 1 : -1;
+        dummy.position.set(side * 6.3, 0, z);
+        // 椅背朝外：站侧决定朝向，附加一点随机的「摆放不正」感
+        dummy.rotation.set(0, (side > 0 ? -Math.PI / 2 : Math.PI / 2) + (s0 - 0.5) * 0.22, 0);
+        dummy.scale.setScalar(gf);
+      }
+      dummy.updateMatrix();
+      this.benches.setMatrixAt(i, dummy.matrix);
+    }
+    this.benches.instanceMatrix.needsUpdate = true;
+
+    // 路牌：细杆立在草皮带边缘，面板朝向道路前方（rotation.y = 0 面向摄像机来的方向）
+    if (this.signs.visible)
+    for (let i = 0; i < this.signN; i++) {
+      const s0 = this.signSeed[i * 3], s1 = this.signSeed[i * 3 + 1], s2 = this.signSeed[i * 3 + 2];
+      const sl = this.slot(i, this.signN, SPAN, s0, this.slotOut);
+      const z = sl.z;
+      const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+      if (gf <= 0.001) {
+        dummy.scale.set(0, 0, 0);
+      } else {
+        const side = s1 > 0.5 ? 1 : -1;
+        dummy.position.set(side * (5.9 + s0 * 0.5), 0, z);
+        dummy.rotation.set(0, (s0 - 0.5) * 0.5, 0);
+        dummy.scale.set(gf, gf * (0.9 + s2 * 0.25), gf);
+      }
+      dummy.updateMatrix();
+      this.signs.setMatrixAt(i, dummy.matrix);
+    }
+    this.signs.instanceMatrix.needsUpdate = true;
+
+    // 篱笆：连续分段（间距 = SPAN / n，几乎首尾相接）→ 一条连续的矮栏线，
+    // 只在自然主题出现，用来划分「草皮」与「更远的野地」。
+    if (this.fences.visible) {
+      const fspan = SPAN / this.fenceN;
+      for (let i = 0; i < this.fenceN; i++) {
+        const s1 = this.fenceSeed[i * 3 + 1], s2 = this.fenceSeed[i * 3 + 2];
+        for (let side = -1; side <= 1; side += 2) {
+          const k = i * 2 + (side > 0 ? 1 : 0);
+          const sl = this.slot(k, this.fenceN * 2, SPAN, s1, this.slotOut);
+          const z = sl.z;
+          const gf = this.genFade(z, charZ - SPAN, charZ + 2, s2);
+          if (gf <= 0.001) {
+            dummy.scale.set(0, 0, 0);
+          } else {
+            // 偶尔断一段（s2 < 0.22）→ 显得年久失修而非程序生成
+            const gap = s2 < 0.22 ? 0 : 1;
+            dummy.position.set(side * (9.2 + s1 * 0.8), 0, z);
+            dummy.rotation.set(0, (s1 - 0.5) * 0.1, (s1 - 0.5) * 0.06);
+            // 每段只占间距的 55%，段与段之间留出真正的空隙（不再是连续栏杆）
+            dummy.scale.set(gf * gap * (fspan / 1.2) * 0.55, gf, gf);
+          }
+          dummy.updateMatrix();
+          this.fences.setMatrixAt(k, dummy.matrix);
+        }
+      }
+      this.fences.instanceMatrix.needsUpdate = true;
+    }
+
     // flowers — 3 head shapes partitioned by slot (i % 3): puff / five-petal / bell
     if (this.stems.visible)
-    for (let i = 0; i < FLOWER_N; i++) {
+    for (let i = 0; i < this.flowerN; i++) {
       const s0 = this.flowerSeed[i * 3], s2 = this.flowerSeed[i * 3 + 2];
-      const sl = this.slot(i, FLOWER_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.flowerN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 1.7, i * 2.9) > 0.48 ? 1 : -1;
@@ -2010,9 +2919,9 @@ export class VoxelWorld {
     // trees — 3 variants partitioned by slot: 0 round broadleaf, 1 upright fir, 2 droopy wide
     const snowy = this.roadU.uSnow.value > 0 && this.snowCaps.visible;
     if (this.trunks.visible)
-    for (let i = 0; i < TREE_N; i++) {
+    for (let i = 0; i < this.treeN; i++) {
       const s0 = this.treeSeed[i * 3], s1 = this.treeSeed[i * 3 + 1], s2 = this.treeSeed[i * 3 + 2];
-      const sl = this.slot(i, TREE_N, TREE_SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.treeN, TREE_SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 80 && ((frame + i) & 1) === 1) continue; // far trees stagger updates
       const present = hash2(cyc * 2.3, i * 5.1) > 0.22; // poisson-like gaps
@@ -2108,9 +3017,9 @@ export class VoxelWorld {
 
     // rocks & bushes — random scatter
     if (this.rocks.visible)
-    for (let i = 0; i < ROCK_N; i++) {
+    for (let i = 0; i < this.rockN; i++) {
       const s0 = this.rockSeed[i * 3], s1 = this.rockSeed[i * 3 + 1], s2 = this.rockSeed[i * 3 + 2];
-      const sl = this.slot(i, ROCK_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.rockN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 1.1, i * 4.3) > 0.5 ? 1 : -1;
@@ -2124,9 +3033,9 @@ export class VoxelWorld {
     }
     this.rocks.instanceMatrix.needsUpdate = true;
     if (this.bushes.visible)
-    for (let i = 0; i < BUSH_N; i++) {
+    for (let i = 0; i < this.bushN; i++) {
       const s0 = this.bushSeed[i * 3], s1 = this.bushSeed[i * 3 + 1], s2 = this.bushSeed[i * 3 + 2];
-      const sl = this.slot(i, BUSH_N, SPAN, s1, this.slotOut);
+      const sl = this.slot(i, this.bushN, SPAN, s1, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const side = hash2(cyc * 2.7, i * 1.9) > 0.5 ? 1 : -1;
@@ -2143,9 +3052,9 @@ export class VoxelWorld {
 
     // mushrooms — small clusters near the road edge, occasional
     if (this.mushrooms.visible)
-    for (let i = 0; i < MUSH_N; i++) {
+    for (let i = 0; i < this.mushN; i++) {
       const s0 = this.mushSeed[i * 3], s1 = this.mushSeed[i * 3 + 1], s2 = this.mushSeed[i * 3 + 2];
-      const sl = this.slot(i, MUSH_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.mushN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const present = hash2(cyc * 3.7, i * 1.3) > 0.35; // patchy
@@ -2162,9 +3071,9 @@ export class VoxelWorld {
 
     // stumps & fallen logs — per-cycle coin flip picks upright stump vs lying log
     if (this.stumps.visible)
-    for (let i = 0; i < STUMP_N; i++) {
+    for (let i = 0; i < this.stumpN; i++) {
       const s0 = this.stumpSeed[i * 3], s1 = this.stumpSeed[i * 3 + 1], s2 = this.stumpSeed[i * 3 + 2];
-      const sl = this.slot(i, STUMP_N, SPAN, s1, this.slotOut);
+      const sl = this.slot(i, this.stumpN, SPAN, s1, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const present = hash2(cyc * 1.9, i * 2.3) > 0.4;
@@ -2187,9 +3096,9 @@ export class VoxelWorld {
     this.stumps.instanceMatrix.needsUpdate = true;
 
     // puddles — rare glossy patches hugging the road edge, shimmer with bass
-    for (let i = 0; i < PUDDLE_N; i++) {
+    for (let i = 0; i < this.puddleN; i++) {
       const s0 = this.puddleSeed[i * 3], s1 = this.puddleSeed[i * 3 + 1], s2 = this.puddleSeed[i * 3 + 2];
-      const sl = this.slot(i, PUDDLE_N, SPAN, s0, this.slotOut);
+      const sl = this.slot(i, this.puddleN, SPAN, s0, this.slotOut);
       const z = sl.z, cyc = sl.cycle;
       if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
       const present = hash2(cyc * 4.1, i * 1.7) > 0.45;
@@ -2205,15 +3114,18 @@ export class VoxelWorld {
     this.puddles.instanceMatrix.needsUpdate = true;
     this.puddleMat.emissiveIntensity = 0.25 + pulse * 0.45;
 
-    // street lamps — regular alternating rhythm, continuous slide from horizon to camera
-    const cs = (SPAN * 1.1) / LAMP_N;
-    const lampSpan = cs * LAMP_N; // one full ring of lamps covers the corridor
+    // street lamps — regular alternating rhythm, continuous slide from horizon to camera.
+    // 环槽间距恒按 MAX_LAMP_N 计算（保证换档时灯距不变、只是灯变多变少），
+    // 超出当前档位数量的灯在 applyDensity() 里已 group.visible=false 且 uLampI=0。
+    const cs = (SPAN * 1.1) / MAX_LAMP_N;
+    const lampSpan = cs * MAX_LAMP_N; // one full ring of lamps covers the corridor
     this.lampHeadMat.emissiveIntensity = 1.3 + pulse * 1.6;
     for (const l of this.lamps) {
+      if (!l.group.visible) continue;
       const slot = l.slot;
       const q = this.distance - 10 + slot * cs;
       const wrap = Math.floor(q / lampSpan);
-      const cyc = wrap * LAMP_N + slot; // rehashes only when this lamp wraps at the horizon
+      const cyc = wrap * MAX_LAMP_N + slot; // rehashes only when this lamp wraps at the horizon
       const z = charZ + 16 - lampSpan + (q - wrap * lampSpan);
       const x = l.side * (5.6 + hash(cyc) * 0.7);
       const lf = this.genFade(z, charZ - SPAN, charZ + 2, hash(slot * 3));
@@ -2227,9 +3139,29 @@ export class VoxelWorld {
       l.glow.scale.set(gs, gs, 1);
       const os = (3.2 + pulse * 1.8) * Math.max(lf, 0.0001) * this.lampGlowBoost;
       l.glowOuter.scale.set(os, os, 1);
+      // P6 外层雾晕：更慢的呼吸（与内两层错开相位），强度最低。lampLayers<3 时整层不可见。
+      if (l.glowFar.visible) {
+        l.glowFar.material.opacity = Math.min(0.16, glowLvl * 0.16);
+        const fs = (7.2 + pulse * 3.2 + Math.sin(t * 0.9 + slot) * 0.7) * Math.max(lf, 0.0001);
+        l.glowFar.scale.set(fs, fs, 1);
+      }
       l.spot.material.opacity = Math.min(0.5, lf * (0.2 + pulse * 0.22 + flicker) * this.lampGlowBoost);
       const ss = (3.2 + pulse * 1.2) * Math.max(lf, 0.0001);
       l.spot.scale.set(ss, ss * 0.45, 1);
+      // P6 灯柱长条影：灯的竖杆在路面上投下的一条细长影子。
+      // 假阴影技术：不投真实 shadowMap，而是在竿底放一条被拉伸的暗色贴片，
+      // 朝向由灯位于道路哪一侧决定（影子朝路面中心倒）。这条影子让灯柱「站在地上」。
+      if (this.contactShadows && this.contactShadows.visible) {
+        const shIdx = 2 + slot;
+        if (shIdx < CONTACT_SHADOW_N) {
+          dummy.position.set(x - l.side * 0.55, 0.014, z);
+          dummy.rotation.set(0, 0, 0);
+          // 沿 X（朝路面中心）拉长，沿 Z 收窄 → 细长条
+          dummy.scale.set(-l.side * 3.0 * lf, 1, 0.35 * lf);
+          dummy.updateMatrix();
+          this.contactShadows.setMatrixAt(shIdx, dummy.matrix);
+        }
+      }
       // 把灯位写进路面 shader 的光池 uniform（每盏灯的横向位置 + 强度）
       this.roadU.uLampX.value[l.slot] = x;
       this.roadU.uLampZ.value[l.slot] = z;
@@ -2240,9 +3172,9 @@ export class VoxelWorld {
 
     // ---- city props ----
     if (this.buildings.visible) {
-      for (let i = 0; i < BUILD_N; i++) {
+      for (let i = 0; i < this.buildN; i++) {
         const s0 = this.buildSeed[i * 3], s1 = this.buildSeed[i * 3 + 1], s2 = this.buildSeed[i * 3 + 2];
-        const sl = this.slot(i, BUILD_N, TREE_SPAN, s0, this.slotOut);
+        const sl = this.slot(i, this.buildN, TREE_SPAN, s0, this.slotOut);
         const z = sl.z, cyc = sl.cycle;
         if (z < charZ - 80 && ((frame + i) & 1) === 1) continue;
         const side = hash2(cyc, i * 3.1) > 0.5 ? 1 : -1;
@@ -2257,9 +3189,9 @@ export class VoxelWorld {
         this.buildings.setMatrixAt(i, dummy.matrix);
       }
       this.buildings.instanceMatrix.needsUpdate = true;
-      for (let i = 0; i < NEON_N; i++) {
+      for (let i = 0; i < this.neonN; i++) {
         const s0 = this.neonSeed[i * 3], s1 = this.neonSeed[i * 3 + 1], s2 = this.neonSeed[i * 3 + 2];
-        const sl = this.slot(i, NEON_N, SPAN, s0, this.slotOut);
+        const sl = this.slot(i, this.neonN, SPAN, s0, this.slotOut);
         const z = sl.z, cyc = sl.cycle;
         if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
         const side = hash2(cyc * 1.3, i * 2.7) > 0.5 ? 1 : -1;
@@ -2274,9 +3206,9 @@ export class VoxelWorld {
       }
       this.neon.instanceMatrix.needsUpdate = true;
       // traffic lights — same ring rhythm as lamps, signal cycles with time
-      const tcs = (SPAN * 1.1) / TRAFFIC_N;
-      const tSpan = tcs * TRAFFIC_N;
-      for (let i = 0; i < TRAFFIC_N; i++) {
+      const tcs = (SPAN * 1.1) / this.trafficN;
+      const tSpan = tcs * this.trafficN;
+      for (let i = 0; i < this.trafficN; i++) {
         const g = this.traffic[i];
         const q = this.distance - 10 + i * tcs + tcs * 0.5;
         const wrap = Math.floor(q / tSpan);
@@ -2300,9 +3232,9 @@ export class VoxelWorld {
       this.sea.position.z = charZ - 80;
       this.seaU.uT.value = t;
       this.seaU.uDist.value = this.distance;
-      for (let i = 0; i < PALM_N; i++) {
+      for (let i = 0; i < this.palmN; i++) {
         const s0 = this.palmSeed[i * 3], s1 = this.palmSeed[i * 3 + 1], s2 = this.palmSeed[i * 3 + 2];
-        const sl = this.slot(i, PALM_N, TREE_SPAN, s0, this.slotOut);
+        const sl = this.slot(i, this.palmN, TREE_SPAN, s0, this.slotOut);
         const z = sl.z, cyc = sl.cycle;
         if (z < charZ - 80 && ((frame + i) & 1) === 1) continue;
         // palms cluster on the sea side (+x), a few on the dune side
@@ -2320,9 +3252,9 @@ export class VoxelWorld {
       }
       this.palms.instanceMatrix.needsUpdate = true;
       this.fronds.instanceMatrix.needsUpdate = true;
-      for (let i = 0; i < UMBRELLA_N; i++) {
+      for (let i = 0; i < this.umbrellaN; i++) {
         const s0 = this.umbrellaSeed[i * 3], s1 = this.umbrellaSeed[i * 3 + 1], s2 = this.umbrellaSeed[i * 3 + 2];
-        const sl = this.slot(i, UMBRELLA_N, SPAN, s0, this.slotOut);
+        const sl = this.slot(i, this.umbrellaN, SPAN, s0, this.slotOut);
         const z = sl.z, cyc = sl.cycle;
         if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
         const present = hash2(cyc * 2.1, i) > 0.3;
@@ -2334,9 +3266,9 @@ export class VoxelWorld {
         this.umbrellas.setMatrixAt(i, dummy.matrix);
       }
       this.umbrellas.instanceMatrix.needsUpdate = true;
-      for (let i = 0; i < SHELL_N; i++) {
+      for (let i = 0; i < this.shellN; i++) {
         const s0 = this.shellSeed[i * 3], s2 = this.shellSeed[i * 3 + 2];
-        const sl = this.slot(i, SHELL_N, SPAN, s0, this.slotOut);
+        const sl = this.slot(i, this.shellN, SPAN, s0, this.slotOut);
         const z = sl.z, cyc = sl.cycle;
         if (z < charZ - 55 && ((frame + i) & 1) === 1) continue;
         const present = hash2(cyc * 3.1, i * 1.9) > 0.3;
@@ -2374,7 +3306,7 @@ export class VoxelWorld {
     }
 
     // clouds — slow drift, wrapped in a far band, pure f(t, distance); size/height layers
-    for (let i = 0; i < CLOUD_N; i++) {
+    for (let i = 0; i < this.cloudN; i++) {
       const c0 = this.cloudSeed[i * 4], c1 = this.cloudSeed[i * 4 + 1], c2 = this.cloudSeed[i * 4 + 2], c3 = this.cloudSeed[i * 4 + 3];
       const band = 320;
       const d = (this.distance * 0.25 + t * (0.6 + c3 * 0.8) + c0 * band) % band;
@@ -2395,6 +3327,12 @@ export class VoxelWorld {
       const o = (this.distance * MTN_K[l] + l * 137) % MTN_W;
       m.position.x = -o - (m.userData.tile as number) * MTN_W;
       m.position.z = charZ + MTN_Z[l];
+    }
+
+    // far tree/building line — 比山更远、视差更小（0.06），只贴住 Z 不横向循环：
+    // 因为齿极密且雾很重，横向漂移会被雾吃掉，不值得付循环成本。
+    if (this.farTreeLine.visible) {
+      this.farTreeLine.position.z = charZ - 160;
     }
 
     // celestial body follows the walker at a fixed sky offset
@@ -2430,7 +3368,7 @@ export class VoxelWorld {
     // butterflies — wander the roadside, flap faster with the mid band
     if (theme.butterflies) {
       const flapSpeed = 9 + bands.mid * 9;
-      for (let i = 0; i < BUTTERFLY_N; i++) {
+      for (let i = 0; i < this.butterflyN; i++) {
         const g = this.butterflies[i];
         const span = 46;
         const d = (this.distance * (0.85 + i * 0.05) + hash(i * 3.7) * span) % span;
@@ -2460,15 +3398,63 @@ export class VoxelWorld {
     const hs = 1.4 + pulse * 0.45 + Math.sin(t * 2.2) * 0.06;
     this.charHalo.scale.set(hs, hs, 1);
 
-    // contact shadow — one soft ellipse under the walker, breathing with the halo
+    // contact shadow — P6 双层椭圆：内层小而深（明确接触点）+ 外层大而淡（软边扩散），
+    // 单层椭圆总是显得「贴了张黑纸」，两层叠加才像被光晕出来的软阴影。
     if (this.contactShadows && this.contactShadows.visible) {
       const cs = 1.5 + pulse * 0.25;
+      // 内层
       dummy.position.set(sx, 0.02, charZ);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(cs, 1, cs * 0.8);
       dummy.updateMatrix();
       this.contactShadows.setMatrixAt(0, dummy.matrix);
+      // 外层（更大更淡）：shadowQuality>=2 才画，否则缩零（避免为一个可选层多一次 draw）
+      if (QUALITY_SETTINGS[this.quality].shadowQuality >= 2) {
+        const cs2 = cs * 2.15;
+        dummy.position.set(sx, 0.018, charZ);
+        dummy.scale.set(cs2, 1, cs2 * 0.72);
+      } else {
+        dummy.scale.set(0, 0, 0);
+      }
+      dummy.updateMatrix();
+      this.contactShadows.setMatrixAt(1, dummy.matrix);
       this.contactShadows.instanceMatrix.needsUpdate = true;
+    }
+
+    // ------------------------------------------------------------------
+    // P5 动态微细节
+    // ------------------------------------------------------------------
+
+    // 雪面脚印：只在「雪主题」或「雪天气」时出现（extras=false 的 low 档关闭）。
+    // 印子固定在角色身后 0.9m 起、每 0.62m 一个，共 FOOTPRINT_N 步 → 约 11m 长的足迹，
+    // 更远的印子会被雾与相机淘汰，因此**无需环槽回收**（这也是它比其它层更省的原因）。
+    this.footprints.visible = snowActive && this.extras;
+    if (this.footprints.visible) {
+      const side = Math.sin(this.distance * 0.12) * 0.5; // 跟随角色的横向摆动
+      for (let k = 0; k < FOOTPRINT_N * 2; k++) {
+        const step = k >> 1;
+        const foot = k % 2 === 0 ? 1 : -1;
+        // 越靠后的印子越淡（1 → 0），最后一次淡出避免「突然消失」
+        const gf = Math.max(0, 1 - step / FOOTPRINT_N);
+        const zz = charZ + 0.9 + step * 0.62;
+        dummy.position.set(side + foot * 0.2, 0.013, zz);
+        dummy.rotation.set(0, foot * 0.14, 0);
+        const s = gf * (0.5 + (k % 3) * 0.03);
+        dummy.scale.set(s * 0.55, 1, s * 1.15); // 印子比脚掌「长」：椭圆脚印
+        dummy.updateMatrix();
+        this.footprints.setMatrixAt(k, dummy.matrix);
+      }
+      this.footprints.instanceMatrix.needsUpdate = true;
+    }
+
+    // 灯下微尘：锚点跟随角色，让相机附近始终有尘埃；仅非 low 档开启。
+    this.dust.visible = this.extras && this.effWeather !== 'rain';
+    if (this.dust.visible) {
+      this.dust.position.set(sx, 0, charZ);
+      this.dustU.uT.value = t;
+      // 夜间更明显（灯是主要光源），白天几乎没有浮尘可看
+      this.dustU.uOpacity.value = (theme.night ? 0.42 : 0.16) + pulse * 0.1;
+      this.dustU.uColor.value.set(theme.lampGlow);
     }
 
     // breath mist — a soft puff every few seconds, drifting forward as it dissolves
@@ -2492,10 +3478,12 @@ export class VoxelWorld {
     this.camera.lookAt(sx * 0.5, 1.3, charZ - 8);
 
     this.bloom.strength = theme.bloom + pulse * 0.16 + bands.level * 0.05;
-    // 曝光随低频轻微呼吸：让整个画面（而非只有 bloom）跟着鼓点起伏，
-    // 幅度刻意压得很小（±3%），否则会变成廉价频闪。
+    // 曝光随低频轻微呼吸：让整个画面（而非只有 bloom）跟着鼓点起伏。
+    // 幅度由主题 exposureBreath 决定：夜景（冬夜/夜都）更明显、日景（清晨/海滩）更克制，
+    // 避免白天出现廉价频闪。low 档关闭呼吸，恒为主题基准曝光。
     const baseExposure = theme.exposure;
-    const beatExposure = baseExposure * (1 + bands.bass * 0.03 + pulse * 0.02);
+    const expAmp = this.fogBreath ? theme.exposureBreath ?? 0.02 : 0;
+    const beatExposure = baseExposure * (1 + bands.bass * expAmp * 1.5 + pulse * expAmp);
     this.renderer.toneMappingExposure = beatExposure;
     this.composer.render();
   }

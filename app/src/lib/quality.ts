@@ -33,7 +33,40 @@ export interface QualitySettings {
   bloomRadiusScale: number;
   /** 装饰实例密度倍率（1 = 基准；被萤火虫/蝴蝶/花瓣/风痕读取） */
   decorDensity: number;
+
+  // ---- 场景细节密度与光照分级（细节增强 pass 新增）----
+
+  /**
+   * 场景元素密度倍率：决定「实际绘制」的实例数量。
+   *
+   * ★ 容量一律按 high 上限预分配（buildXxx 用 MAX_DENSITY_SCALE 算容量），
+   *   低档用 setDrawRange / scale=0 降级，**绝不重建几何或重分配数组**。
+   * 语义：low 0.6（并隐藏所有新增元素）/ medium 1.0 / high 1.4
+   */
+  densityScale: number;
+  /** 假接触阴影层数：0 = 无 / 1 = 单层椭圆 / 2 = 双层 + 灯柱长条影 */
+  shadowQuality: 0 | 1 | 2;
+  /** 灯柱光锥 / 体积光柱是否渲染 */
+  volumetricLight: boolean;
+  /** 灯柱光晕层数（1 = 仅 glow / 2 = +glowOuter / 3 = +glowFar） */
+  lampLayers: 1 | 2 | 3;
+  /** 雾密度与曝光的逐帧呼吸是否启用（low 关闭，省常数级开销） */
+  fogBreath: boolean;
+  /** 大气扩展层总开关（光尘 / 薄雾带 / 车流光带 / 浪线 / 落地堆积） */
+  ambienceExtras: boolean;
+  /** 星空点数（setDrawRange 降级） */
+  starCount: number;
+  /** 体积光柱层数 */
+  godrayLayers: 0 | 1 | 2;
 }
+
+/**
+ * 实例容量的预分配倍率。
+ *
+ * 所有 InstancedMesh / Points 的**容量**都按此值（high 档上限）分配，
+ * 这样运行时切档只需要 setDrawRange / scale=0 降级，永远不会重建几何。
+ */
+export const MAX_DENSITY_SCALE = 1.4;
 
 export const QUALITY_SETTINGS: Record<QualityLevel, QualitySettings> = {
   low: {
@@ -43,6 +76,14 @@ export const QUALITY_SETTINGS: Record<QualityLevel, QualitySettings> = {
     contactShadows: false,
     bloomRadiusScale: 1.0,
     decorDensity: 0.5,
+    densityScale: 0.6,
+    shadowQuality: 0,
+    volumetricLight: false,
+    lampLayers: 1,
+    fogBreath: false,
+    ambienceExtras: false,
+    starCount: 600,
+    godrayLayers: 0,
   },
   medium: {
     msaaSamples: 2,
@@ -51,6 +92,14 @@ export const QUALITY_SETTINGS: Record<QualityLevel, QualitySettings> = {
     contactShadows: true,
     bloomRadiusScale: 1.0,
     decorDensity: 1.0,
+    densityScale: 1.0,
+    shadowQuality: 1,
+    volumetricLight: true,
+    lampLayers: 2,
+    fogBreath: true,
+    ambienceExtras: true,
+    starCount: 1200,
+    godrayLayers: 1,
   },
   high: {
     msaaSamples: 4,
@@ -59,6 +108,14 @@ export const QUALITY_SETTINGS: Record<QualityLevel, QualitySettings> = {
     contactShadows: true,
     bloomRadiusScale: 1.25,
     decorDensity: 1.3,
+    densityScale: 1.4,
+    shadowQuality: 2,
+    volumetricLight: true,
+    lampLayers: 3,
+    fogBreath: true,
+    ambienceExtras: true,
+    starCount: 2000,
+    godrayLayers: 2,
   },
 };
 
